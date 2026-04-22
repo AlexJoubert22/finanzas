@@ -1,0 +1,82 @@
+"""Pydantic schemas for market data returned by the sources layer.
+
+Keeps the HTTP response shape decoupled from the provider-specific
+dicts (`ccxt` / `yfinance` return very different fields).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+TickerKind = Literal["crypto", "stock"]
+
+
+class Candle(BaseModel):
+    """A single OHLCV bar."""
+
+    model_config = ConfigDict(frozen=True)
+
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+
+class Quote(BaseModel):
+    """Latest price snapshot for a ticker."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str
+    kind: TickerKind
+    source: str = Field(description="Data source that produced this quote (ccxt, yfinance…).")
+    price: float
+    change_24h_pct: float | None = None
+    currency: str | None = None
+    venue: str | None = Field(
+        default=None,
+        description="Exchange or market code (e.g. 'binance', 'NASDAQ').",
+    )
+    timestamp: datetime
+
+
+class TechnicalRating(BaseModel):
+    """TradingView-TA summary — enrichment, never blocks the main response."""
+
+    model_config = ConfigDict(frozen=True)
+
+    recommendation: str = Field(
+        description="One of BUY / SELL / NEUTRAL / STRONG_BUY / STRONG_SELL.",
+    )
+    buy: int
+    sell: int
+    neutral: int
+    timeframe: str
+
+
+class SymbolResponse(BaseModel):
+    """Top-level payload for `GET /symbol/{ticker}`.
+
+    The ``candles`` array is capped to 100 most-recent bars to keep the
+    JSON payload small. Callers wanting full history should use a
+    dedicated endpoint (comes in a later phase).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    quote: Quote
+    candles: list[Candle]
+    technical_rating: TechnicalRating | None = None
+    disclaimer: str = Field(
+        default=(
+            "No proporcionamos consejos financieros ni de inversión. "
+            "Solo análisis descriptivo de los datos provistos. "
+            "El usuario debe consultar a un profesional cualificado antes de "
+            "tomar decisiones de inversión."
+        ),
+    )

@@ -12,7 +12,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from mib import __version__
-from mib.api.routers import health
+from mib.api.dependencies import shutdown_sources
+from mib.api.routers import health, symbol
 from mib.logger import logger
 
 
@@ -26,6 +27,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     logger.info("mib api starting · version={}", __version__)
     yield
     logger.info("mib api stopping")
+    await shutdown_sources()
 
 
 def create_app() -> FastAPI:
@@ -40,6 +42,7 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health.router)
-    # Additional routers (symbol, scan, news, macro, ask) land in phase 2+.
+    app.include_router(symbol.router)
+    # Additional routers (scan, news, macro, ask) land in phase 3+.
 
     return app
