@@ -1,0 +1,139 @@
+[project]
+name = "mib"
+version = "0.1.0"
+description = "Market Intelligence Bot — self-hosted financial intelligence with free-tier LLMs"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "Alex Joubert" }]
+
+dependencies = [
+  # Core async stack
+  "fastapi>=0.115.0,<0.117",
+  "uvicorn[standard]>=0.32.0,<0.36",
+  "pydantic>=2.9,<3",
+  "pydantic-settings>=2.6,<3",
+  "sqlalchemy[asyncio]>=2.0.35,<2.1",
+  "aiosqlite>=0.20,<0.22",
+  "alembic>=1.14,<1.16",
+  "apscheduler>=3.10,<4",
+  "httpx>=0.27,<0.29",
+  "tenacity>=9.0,<10",
+  "loguru>=0.7,<0.8",
+  # Financial data sources
+  "ccxt>=4.4,<5",
+  "yfinance>=0.2.50,<0.3",
+  "pandas>=2.2,<2.4",
+  "pandas-ta>=0.3.14b,<0.5",
+  "tradingview-ta>=3.3,<4",
+  "feedparser>=6.0,<7",
+  # AI providers
+  "groq>=0.11,<1",
+  "openai>=1.54,<2",
+  "google-generativeai>=0.8,<1",
+  # Telegram + charting
+  "python-telegram-bot>=21.6,<22",
+  "mplfinance>=0.12.10b,<0.13",
+  # YAML config
+  "pyyaml>=6.0,<7",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3,<9",
+  "pytest-asyncio>=0.24,<1",
+  "pytest-mock>=3.14,<4",
+  "pytest-cov>=6.0,<8",
+  "respx>=0.22,<1",
+  "ruff>=0.8,<1",
+  "mypy>=1.13,<2",
+  "types-pyyaml>=6.0.12,<7",
+  "pre-commit>=4.0,<5",
+  "detect-secrets>=1.5,<2",
+]
+
+# Permite ejecutar `python -m mib.main`.
+[tool.hatch.build.targets.wheel]
+packages = ["src/mib"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# ─────────────────────────────────────────────────────────────────
+# ruff — lint + format (sustituye black+isort+flake8)
+# ─────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["src/mib/db/migrations/versions"]
+
+[tool.ruff.lint]
+# Reglas exigidas por el spec (sección 12):
+# E/F = pycodestyle+pyflakes básicos
+# I   = isort
+# N   = pep8-naming
+# UP  = pyupgrade (sintaxis moderna)
+# B   = bugbear
+# A   = builtins shadowing
+# C4  = comprehensions
+# RET = return sanity
+# SIM = simplifications
+# ARG = unused arguments
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "RET", "SIM", "ARG"]
+ignore = [
+  "E501",   # line too long (ruff format lo maneja)
+  "B008",   # function-call-in-default-argument (FastAPI Depends())
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["ARG", "SIM"]          # fixtures y helpers relajados
+"src/mib/db/migrations/**/*.py" = ["ALL"] # alembic autogen
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ─────────────────────────────────────────────────────────────────
+# mypy — strict solo en módulos críticos (sección 12 del spec)
+# ─────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+check_untyped_defs = true
+no_implicit_optional = true
+# Los stubs de libs de data/telegram no siempre existen; no bloqueamos.
+ignore_missing_imports = true
+# Excluir alembic autogen (no lo firmamos)
+exclude = ["src/mib/db/migrations/versions/"]
+
+[[tool.mypy.overrides]]
+# Strict solo en estos módulos, el resto queda en mypy normal.
+module = ["mib.ai.*", "mib.sources.base", "mib.services.*"]
+strict = true
+
+# ─────────────────────────────────────────────────────────────────
+# pytest
+# ─────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+minversion = "8.0"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+  "integration: tests que requieren servicios externos o DB real",
+  "slow: tests que tardan más de 1s",
+]
+
+[tool.coverage.run]
+source = ["src/mib"]
+branch = true
+omit = ["src/mib/db/migrations/*", "src/mib/main.py"]
+
+[tool.coverage.report]
+skip_empty = true
+show_missing = true
+# Spec: 70% global / 85% sources y ai/router (se verifica en fase 6).
+precision = 1

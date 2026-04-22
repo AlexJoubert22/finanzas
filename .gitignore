@@ -1,0 +1,54 @@
+# Secrets — jamás commitear
+.env
+.env.*
+!.env.example
+
+# Data runtime
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+.venv/
+venv/
+env/
+.python-version
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Backups temporales
+*.bak
+*.bak.*
+
+# Docker runtime
+.docker/
