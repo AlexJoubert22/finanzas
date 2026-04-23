@@ -15,6 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mib import __version__
+from mib.api.dependencies import get_ai_router
 from mib.db.session import get_session
 from mib.logger import logger
 from mib.models.health import HealthResponse
@@ -45,6 +46,11 @@ async def health(session: AsyncSession = Depends(get_session)) -> HealthResponse
     """
     db_ok = await _db_ok(session)
     sources_status = get_health_cache().snapshot()
+    ai_quotas: dict[str, float] = {}
+    try:
+        ai_quotas = await get_ai_router().usage_snapshot()
+    except Exception as exc:  # noqa: BLE001
+        logger.info("health: ai quota snapshot failed: {}", exc)
 
     # Aggregate rule:
     #   down       = DB down (hard blocker)
@@ -61,7 +67,7 @@ async def health(session: AsyncSession = Depends(get_session)) -> HealthResponse
         status=status,
         db_ok=db_ok,
         sources_status=sources_status,  # type: ignore[arg-type]
-        ai_quotas={},
+        ai_quotas=ai_quotas,
         uptime_seconds=int(time.monotonic() - _STARTED_AT),
         version=__version__,
         timestamp=datetime.now(UTC),

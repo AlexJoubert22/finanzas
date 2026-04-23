@@ -1,0 +1,23 @@
+# Default ticker universes per scanner preset.
+# Callers can override via the `tickers` query param of `/scan`.
+# Hot-reloadable: edits take effect on the next /scan call.
+default_tickers:
+  crypto:
+    - BTC/USDT
+    - ETH/USDT
+    - SOL/USDT
+    - BNB/USDT
+    - XRP/USDT
+    - ADA/USDT
+    - DOGE/USDT
+    - AVAX/USDT
+  stocks:
+    - AAPL
+    - MSFT
+    - NVDA
+    - TSLA
+    - GOOGL
+    - META
+    - AMZN
+    - SPY
+    - QQQ

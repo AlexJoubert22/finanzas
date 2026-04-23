@@ -27,10 +27,12 @@ dependencies = [
   "pandas-ta>=0.3.14b,<0.5",
   "tradingview-ta>=3.3,<4",
   "feedparser>=6.0,<7",
-  # AI providers
+  # AI providers.
+  # `google-genai` replaces the retired `google-generativeai` (emitted a
+  # DeprecationWarning since Fase 1). APIs are similar but not identical.
   "groq>=0.11,<1",
   "openai>=1.54,<2",
-  "google-generativeai>=0.8,<1",
+  "google-genai>=1.0,<3",
   # Telegram + charting
   "python-telegram-bot>=21.6,<22",
   "mplfinance>=0.12.10b,<0.13",

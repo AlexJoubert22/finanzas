@@ -13,7 +13,7 @@ from fastapi import FastAPI
 
 from mib import __version__
 from mib.api.dependencies import shutdown_sources
-from mib.api.routers import health, macro, news, symbol
+from mib.api.routers import ask, health, macro, news, scan, symbol
 from mib.logger import logger
 from mib.scheduler import start_scheduler, stop_scheduler
 
@@ -48,6 +48,7 @@ def create_app() -> FastAPI:
     app.include_router(symbol.router)
     app.include_router(macro.router)
     app.include_router(news.router)
-    # Remaining routers (scan, ask) land in phase 4.
+    app.include_router(ask.router)
+    app.include_router(scan.router)
 
     return app

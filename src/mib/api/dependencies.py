@@ -6,9 +6,17 @@ them once at startup and reuse them.
 
 from __future__ import annotations
 
+from mib.ai.models import ProviderId
+from mib.ai.providers.base import AIProvider
+from mib.ai.providers.gemini_provider import GeminiProvider
+from mib.ai.providers.groq_provider import GroqProvider
+from mib.ai.providers.openrouter_provider import OpenRouterProvider
+from mib.ai.router import AIRouter
+from mib.services.ai_service import AIService
 from mib.services.macro import MacroService
 from mib.services.market import MarketService
 from mib.services.news import NewsService
+from mib.services.scanner import ScannerService
 from mib.sources.alphavantage import AlphaVantageSource
 from mib.sources.ccxt_source import CCXTSource
 from mib.sources.coingecko import CoinGeckoSource
@@ -30,6 +38,10 @@ _rss: RSSSource | None = None
 _market: MarketService | None = None
 _macro: MacroService | None = None
 _news: NewsService | None = None
+
+_ai_router: AIRouter | None = None
+_ai_service: AIService | None = None
+_scanner: ScannerService | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -119,6 +131,34 @@ def get_news_service() -> NewsService:
     if _news is None:
         _news = NewsService(finnhub=get_finnhub_source(), rss=get_rss_source())
     return _news
+
+
+# ─── IA wiring ────────────────────────────────────────────────────────
+
+def get_ai_router() -> AIRouter:
+    global _ai_router  # noqa: PLW0603
+    if _ai_router is None:
+        providers: dict[ProviderId, AIProvider] = {
+            ProviderId.GROQ: GroqProvider(),
+            ProviderId.OPENROUTER: OpenRouterProvider(),
+            ProviderId.GEMINI: GeminiProvider(),
+        }
+        _ai_router = AIRouter(providers=providers)
+    return _ai_router
+
+
+def get_ai_service() -> AIService:
+    global _ai_service  # noqa: PLW0603
+    if _ai_service is None:
+        _ai_service = AIService(router=get_ai_router())
+    return _ai_service
+
+
+def get_scanner_service() -> ScannerService:
+    global _scanner  # noqa: PLW0603
+    if _scanner is None:
+        _scanner = ScannerService(market=get_market_service())
+    return _scanner
 
 
 async def shutdown_sources() -> None:

@@ -14,9 +14,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from mib.api.dependencies import get_market_service
+from mib.api.dependencies import get_ai_service, get_market_service
 from mib.logger import logger
 from mib.models.market import SymbolResponse
+from mib.services.ai_service import AIService
 from mib.services.market import MarketService
 
 router = APIRouter(tags=["symbol"])
@@ -31,7 +32,12 @@ async def get_symbol(
         description="OHLCV interval.",
     ),
     limit: int = Query(default=100, ge=1, le=500, description="Max candles to return."),
+    with_ai: bool = Query(
+        default=True,
+        description="If true, attach an IA analysis paragraph; false keeps the response text-free.",
+    ),
     service: MarketService = Depends(get_market_service),
+    ai: AIService = Depends(get_ai_service),
 ) -> SymbolResponse:
     """Return the latest quote and OHLCV bars for ``ticker``.
 
@@ -50,7 +56,7 @@ async def get_symbol(
         ``/symbol/EURUSD=X``    → EURUSD spot forex
     """
     try:
-        return await service.get_symbol(
+        resp = await service.get_symbol(
             ticker, ohlcv_timeframe=timeframe, ohlcv_limit=limit
         )
     except Exception as exc:  # noqa: BLE001 - we want a generic 502 for upstream failures
@@ -59,3 +65,9 @@ async def get_symbol(
             status_code=502,
             detail=f"No se pudieron obtener datos para '{ticker}'. Prueba más tarde.",
         ) from exc
+
+    if with_ai:
+        analysis = await ai.symbol_analysis(resp)
+        if analysis:
+            resp = resp.model_copy(update={"ai_analysis": analysis})
+    return resp

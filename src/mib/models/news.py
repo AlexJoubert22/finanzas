@@ -16,6 +16,11 @@ class NewsItem(BaseModel):
     summary: str = ""
     published_at: datetime
     ticker: str | None = None
+    sentiment: str | None = Field(
+        default=None,
+        description="'bullish' | 'bearish' | 'neutral' — populated when IA is available.",
+    )
+    sentiment_rationale: str | None = None
 
 
 class NewsResponse(BaseModel):
