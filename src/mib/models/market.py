@@ -59,6 +59,33 @@ class TechnicalRating(BaseModel):
     timeframe: str
 
 
+class TechnicalSnapshot(BaseModel):
+    """Latest value of a fixed set of indicators for a ticker.
+
+    Each field is optional because insufficient history (e.g. only 30
+    bars when EMA-200 needs 200) yields ``None`` gracefully.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # Momentum
+    rsi_14: float | None = None
+    # Trend (MACD 12/26/9)
+    macd: float | None = Field(default=None, description="MACD line")
+    macd_signal: float | None = None
+    macd_hist: float | None = None
+    # Moving averages
+    ema_20: float | None = None
+    ema_50: float | None = None
+    ema_200: float | None = None
+    # Volatility
+    bb_lower: float | None = None
+    bb_middle: float | None = None
+    bb_upper: float | None = None
+    # Trend strength
+    adx_14: float | None = None
+
+
 class SymbolResponse(BaseModel):
     """Top-level payload for `GET /symbol/{ticker}`.
 
@@ -71,6 +98,7 @@ class SymbolResponse(BaseModel):
 
     quote: Quote
     candles: list[Candle]
+    indicators: TechnicalSnapshot | None = None
     technical_rating: TechnicalRating | None = None
     disclaimer: str = Field(
         default=(

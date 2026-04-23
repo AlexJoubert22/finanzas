@@ -12,8 +12,11 @@ from __future__ import annotations
 import asyncio
 from typing import Literal
 
+import pandas as pd
+
+from mib.indicators.technical import compute_snapshot
 from mib.logger import logger
-from mib.models.market import Candle, Quote, SymbolResponse, TechnicalRating
+from mib.models.market import Candle, Quote, SymbolResponse, TechnicalRating, TechnicalSnapshot
 from mib.sources.ccxt_source import CCXTSource
 from mib.sources.tradingview_ta import TradingViewTASource
 from mib.sources.tv_exchange_map import is_forex_or_futures, resolve_tv_exchange
@@ -92,7 +95,7 @@ class MarketService:
         ohlcv_timeframe: str = "1h",
         ohlcv_limit: int = 100,
     ) -> SymbolResponse:
-        """Fetch quote + OHLCV (+ optional TV rating) for ``raw_ticker``."""
+        """Fetch quote + OHLCV + indicators (+ optional TV rating)."""
         kind = detect_ticker_kind(raw_ticker)
         if kind == "crypto":
             symbol = normalise_crypto_symbol(raw_ticker)
@@ -103,7 +106,39 @@ class MarketService:
                 raw_ticker.strip(), ohlcv_timeframe, ohlcv_limit
             )
             rating = await self._enrich_tv(raw_ticker.strip(), kind, ohlcv_timeframe)
-        return SymbolResponse(quote=quote, candles=candles, technical_rating=rating)
+
+        # Compute the technical snapshot on the OHLCV we already have.
+        # Needs at least ~30 bars to produce anything meaningful; below
+        # that pandas-ta returns NaN and our helper maps it to None.
+        indicators = self._compute_indicators(candles)
+
+        return SymbolResponse(
+            quote=quote,
+            candles=candles,
+            indicators=indicators,
+            technical_rating=rating,
+        )
+
+    @staticmethod
+    def _compute_indicators(candles: list[Candle]) -> TechnicalSnapshot | None:
+        """Build a DataFrame from the response candles and compute the snapshot."""
+        if len(candles) < 15:
+            # RSI(14) needs ≥15 points; refuse early.
+            return None
+        try:
+            df = pd.DataFrame(
+                {
+                    "open": [c.open for c in candles],
+                    "high": [c.high for c in candles],
+                    "low": [c.low for c in candles],
+                    "close": [c.close for c in candles],
+                    "volume": [c.volume for c in candles],
+                }
+            )
+            return compute_snapshot(df)
+        except Exception as exc:  # noqa: BLE001 - never fail the main response on TA
+            logger.info("indicators compute soft-fail: {}", exc)
+            return None
 
     # ─── Crypto path (CCXT) ────────────────────────────────────────────
 

@@ -6,19 +6,36 @@ them once at startup and reuse them.
 
 from __future__ import annotations
 
+from mib.services.macro import MacroService
 from mib.services.market import MarketService
+from mib.services.news import NewsService
+from mib.sources.alphavantage import AlphaVantageSource
 from mib.sources.ccxt_source import CCXTSource
+from mib.sources.coingecko import CoinGeckoSource
+from mib.sources.finnhub import FinnhubSource
+from mib.sources.fred import FREDSource
+from mib.sources.rss import RSSSource
 from mib.sources.tradingview_ta import TradingViewTASource
 from mib.sources.yfinance_source import YFinanceSource
 
 _ccxt: CCXTSource | None = None
 _yf: YFinanceSource | None = None
 _tv: TradingViewTASource | None = None
-_market: MarketService | None = None
+_cg: CoinGeckoSource | None = None
+_av: AlphaVantageSource | None = None
+_finnhub: FinnhubSource | None = None
+_fred: FREDSource | None = None
+_rss: RSSSource | None = None
 
+_market: MarketService | None = None
+_macro: MacroService | None = None
+_news: NewsService | None = None
+
+
+# ─── Source singletons ────────────────────────────────────────────────
 
 def get_ccxt_source() -> CCXTSource:
-    global _ccxt  # noqa: PLW0603 - intentional module-level singleton
+    global _ccxt  # noqa: PLW0603
     if _ccxt is None:
         _ccxt = CCXTSource(exchange_id="binance")
     return _ccxt
@@ -38,6 +55,43 @@ def get_tradingview_source() -> TradingViewTASource:
     return _tv
 
 
+def get_coingecko_source() -> CoinGeckoSource:
+    global _cg  # noqa: PLW0603
+    if _cg is None:
+        _cg = CoinGeckoSource()
+    return _cg
+
+
+def get_alphavantage_source() -> AlphaVantageSource:
+    global _av  # noqa: PLW0603
+    if _av is None:
+        _av = AlphaVantageSource()
+    return _av
+
+
+def get_finnhub_source() -> FinnhubSource:
+    global _finnhub  # noqa: PLW0603
+    if _finnhub is None:
+        _finnhub = FinnhubSource()
+    return _finnhub
+
+
+def get_fred_source() -> FREDSource:
+    global _fred  # noqa: PLW0603
+    if _fred is None:
+        _fred = FREDSource()
+    return _fred
+
+
+def get_rss_source() -> RSSSource:
+    global _rss  # noqa: PLW0603
+    if _rss is None:
+        _rss = RSSSource()
+    return _rss
+
+
+# ─── Service singletons ───────────────────────────────────────────────
+
 def get_market_service() -> MarketService:
     global _market  # noqa: PLW0603
     if _market is None:
@@ -47,6 +101,24 @@ def get_market_service() -> MarketService:
             tv_source=get_tradingview_source(),
         )
     return _market
+
+
+def get_macro_service() -> MacroService:
+    global _macro  # noqa: PLW0603
+    if _macro is None:
+        _macro = MacroService(
+            yf=get_yfinance_source(),
+            fred=get_fred_source(),
+            cg=get_coingecko_source(),
+        )
+    return _macro
+
+
+def get_news_service() -> NewsService:
+    global _news  # noqa: PLW0603
+    if _news is None:
+        _news = NewsService(finnhub=get_finnhub_source(), rss=get_rss_source())
+    return _news
 
 
 async def shutdown_sources() -> None:

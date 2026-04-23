@@ -13,6 +13,10 @@ from apscheduler.triggers.interval import IntervalTrigger  # type: ignore[import
 
 from mib.api.dependencies import (
     get_ccxt_source,
+    get_coingecko_source,
+    get_finnhub_source,
+    get_fred_source,
+    get_rss_source,
     get_tradingview_source,
     get_yfinance_source,
 )
@@ -42,6 +46,12 @@ async def _probe_sources_job() -> None:
         get_ccxt_source(),
         get_yfinance_source(),
         get_tradingview_source(),
+        get_coingecko_source(),
+        get_finnhub_source(),
+        get_fred_source(),
+        get_rss_source(),
+        # AlphaVantage is *not* in the probe: each probe burns 1 of our
+        # 25/day calls. Its status is derived lazily from actual usage.
     ]
     await cache.probe_all(sources)
     logger.debug("health-probe: cache={}", cache.snapshot())

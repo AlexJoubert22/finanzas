@@ -1,0 +1,16 @@
+# RSS feeds consumed by mib.sources.rss.RSSSource.
+# Hot-reloadable: editing this file takes effect on the next fetch
+# (no container restart needed) — spec §1.10.
+feeds:
+  - name: Reuters Business
+    url: https://www.reuters.com/markets/feed/
+  - name: Reuters Markets
+    url: https://www.reutersagency.com/feed/?best-topics=markets&post_type=best
+  - name: CoinDesk
+    url: https://www.coindesk.com/arc/outboundfeeds/rss/
+  - name: CoinTelegraph
+    url: https://cointelegraph.com/rss
+  - name: MarketWatch Top
+    url: https://feeds.content.dowjones.io/public/rss/mw_topstories
+  - name: SEC EDGAR filings
+    url: https://www.sec.gov/cgi-bin/browse-edgar?action=getcurrent&type=&company=&dateb=&owner=include&count=40&output=atom
