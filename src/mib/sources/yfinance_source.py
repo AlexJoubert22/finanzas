@@ -2,12 +2,18 @@
 
 ``yfinance`` is synchronous; we wrap every call with ``asyncio.to_thread``
 to keep handlers non-blocking. Cache TTL for quotes is 60 s (spec §4).
+
+**LRU on Ticker objects** (FASE 5 pre-polish): yfinance lazily builds a
+session per ``yf.Ticker(symbol)`` with a requests cookie jar and parsing
+state that grows with use. For a long-running service we cap the Ticker
+cache to 50 symbols so memory cannot grow indefinitely.
 """
 
 from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
+from functools import lru_cache
 from typing import Any, ClassVar, cast
 
 import yfinance as yf  # type: ignore[import-untyped]
@@ -15,6 +21,14 @@ import yfinance as yf  # type: ignore[import-untyped]
 from mib.logger import logger
 from mib.models.market import Candle, Quote
 from mib.sources.base import DataSource, RateLimiter, SourceError
+
+
+# Bounded Ticker cache shared across calls. Sized for the ~50 tickers a
+# single user is realistically watching (top stocks + some indices).
+@lru_cache(maxsize=50)
+def _ticker(symbol: str) -> yf.Ticker:
+    """Memoised ``yf.Ticker`` factory — evicts LRU at 50 entries."""
+    return yf.Ticker(symbol)
 
 _TTL_QUOTE_SEC = 60
 _TTL_OHLCV_SEC = 60
@@ -127,7 +141,7 @@ class YFinanceSource(DataSource):
 
     @staticmethod
     def _sync_fetch_quote(ticker: str) -> dict[str, Any]:
-        t = yf.Ticker(ticker)
+        t = _ticker(ticker)
         # fast_info is ~100× faster than .info (no full fundamentals pull).
         fi = t.fast_info
         # fast_info exposes dict-like read; copy the fields we care about to
@@ -158,7 +172,7 @@ class YFinanceSource(DataSource):
     def _sync_fetch_ohlcv(
         ticker: str, interval: str, period: str, limit: int
     ) -> list[dict[str, Any]]:
-        t = yf.Ticker(ticker)
+        t = _ticker(ticker)
         df = t.history(interval=interval, period=period, auto_adjust=False)
         if df is None or df.empty:
             return []

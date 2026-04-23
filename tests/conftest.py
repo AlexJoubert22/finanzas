@@ -65,4 +65,14 @@ async def fresh_db() -> AsyncIterator[None]:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
+
+    # Drop any cross-test state carried by module-level lru_cache
+    # (_ticker in yfinance_source, _mpf/_style in charting).
+    try:
+        from mib.sources.yfinance_source import _ticker
+
+        _ticker.cache_clear()
+    except Exception:  # noqa: BLE001 — best-effort hygiene
+        pass
+
     yield

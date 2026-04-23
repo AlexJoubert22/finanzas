@@ -7,9 +7,11 @@ Flow:
     3. AIService.summarise_answer() turns the gathered data into a
        short natural-language answer.
 
-The endpoint is bounded at 30 s total (spec: "respuesta coherente en
-<10s" is the target for happy path). Anything heavier should use the
-individual endpoints.
+Hard total-timeout of 15 s wrapping the WHOLE pipeline (plan → fetch →
+summarise). This is deliberate — individual providers have their own
+per-call timeouts (Groq 15, OR 25, Gemini 30) but if a chain walks all
+three we could accumulate 70+ s. Spec acceptance criterion asks for
+<10 s target; 15 s gives us a safe ceiling for outliers.
 """
 
 from __future__ import annotations
@@ -35,6 +37,10 @@ from mib.services.news import NewsService
 
 router = APIRouter(tags=["ask"])
 
+# Hard total timeout for the whole /ask pipeline. Any request slower than
+# this is killed and a partial/fallback answer is returned (or 504).
+_ASK_HARD_TIMEOUT_S = 15.0
+
 
 @router.post("/ask", response_model=AskResponse)
 async def ask(
@@ -44,7 +50,35 @@ async def ask(
     macro: MacroService = Depends(get_macro_service),
     news: NewsService = Depends(get_news_service),
 ) -> AskResponse:
-    """Answer a natural-language market question using IA + data sources."""
+    """Answer a natural-language market question using IA + data sources.
+
+    Total pipeline is bounded at ``_ASK_HARD_TIMEOUT_S`` seconds via a
+    single outer ``asyncio.wait_for``. On timeout we return HTTP 504.
+    """
+    try:
+        return await asyncio.wait_for(
+            _run_ask_pipeline(body, ai, market, macro, news),
+            timeout=_ASK_HARD_TIMEOUT_S,
+        )
+    except TimeoutError as exc:
+        logger.warning("/ask timed out after {}s for: {}", _ASK_HARD_TIMEOUT_S, body.question)
+        raise HTTPException(
+            status_code=504,
+            detail=(
+                f"La consulta tardó más de {_ASK_HARD_TIMEOUT_S:.0f}s. "
+                "Prueba más tarde o usa los endpoints individuales."
+            ),
+        ) from exc
+
+
+async def _run_ask_pipeline(
+    body: AskRequest,
+    ai: AIService,
+    market: MarketService,
+    macro: MacroService,
+    news: NewsService,
+) -> AskResponse:
+    """The actual plan → fetch → summarise sequence."""
     try:
         plan = await ai.plan_query(body.question)
     except Exception as exc:  # noqa: BLE001
@@ -52,16 +86,18 @@ async def ask(
         raise HTTPException(status_code=502, detail="El planner IA no respondió.") from exc
 
     collected = await _execute_plan(plan, market, macro, news)
+
+    # Summarise uses its own internal router fallback; we just catch
+    # any lingering exception so a bad LLM shape never kills the response.
     try:
-        answer = await asyncio.wait_for(
-            ai.summarise_answer(body.question, plan, collected),
-            timeout=25.0,
-        )
-    except TimeoutError:
+        answer = await ai.summarise_answer(body.question, plan, collected)
+    except Exception as exc:  # noqa: BLE001
+        logger.info("/ask summariser soft-fail: {}", exc)
         answer = (
             "No he podido sintetizar una respuesta en el tiempo disponible. "
             "Consulta los datos estructurados arriba."
         )
+
     return AskResponse(
         question=body.question,
         plan=plan,

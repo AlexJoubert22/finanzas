@@ -4,47 +4,64 @@ Groq is our fastest option (their LPU backend returns in ~1 s for 70B
 models) and has the most generous free-tier QPS; we prefer it for
 task types ``FAST_CLASSIFY`` and ``ANALYSIS``.
 
-If ``GROQ_API_KEY`` is empty we mark the provider as unavailable so
-the router silently falls through to OpenRouter / Gemini.
+Lazy import and client construction (FASE 5 pre-polish): we don't
+import the ``groq`` SDK at module load time, and we don't build the
+``AsyncGroq`` client until the first real call. This keeps the idle
+baseline lower and lets ``/health`` query the router's quota snapshot
+without touching any upstream.
 """
 
 from __future__ import annotations
 
 import time
-
-from groq import AsyncGroq
+from typing import TYPE_CHECKING, Any
 
 from mib.ai.models import ProviderId
 from mib.ai.providers.base import AIProvider, AIResponse, AITask
 from mib.config import get_settings
 from mib.logger import logger
 
+if TYPE_CHECKING:  # pragma: no cover
+    from groq import AsyncGroq
+
 
 class GroqProvider(AIProvider):
     id = ProviderId.GROQ
 
     def __init__(self) -> None:
-        key = get_settings().groq_api_key
-        self._available = bool(key)
-        self._client = AsyncGroq(api_key=key) if self._available else None
+        self._key = get_settings().groq_api_key
+        self._available = bool(self._key)
+        # Lazy: no SDK import, no client build until first call.
+        self._client: AsyncGroq | None = None
 
     def is_available(self) -> bool:
         return self._available
 
+    def _ensure_client(self) -> AsyncGroq | None:
+        if self._client is not None:
+            return self._client
+        if not self._available:
+            return None
+        from groq import AsyncGroq  # noqa: PLC0415 - intentional lazy
+
+        self._client = AsyncGroq(api_key=self._key)
+        return self._client
+
     async def complete(self, task: AITask, *, model: str) -> AIResponse:
-        if not self._available or self._client is None:
+        client = self._ensure_client()
+        if client is None:
             return AIResponse.failed(
                 provider=self.id, model=model, error="GROQ_API_KEY not configured"
             )
 
-        messages = []
+        messages: list[dict[str, Any]] = []
         if task.system:
             messages.append({"role": "system", "content": task.system})
         messages.append({"role": "user", "content": task.prompt})
 
         start = time.monotonic()
         try:
-            resp = await self._client.chat.completions.create(
+            resp = await client.chat.completions.create(
                 model=model,
                 messages=messages,  # type: ignore[arg-type]
                 max_tokens=task.max_tokens,

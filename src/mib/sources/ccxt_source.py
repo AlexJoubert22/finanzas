@@ -4,21 +4,29 @@ Uses ``ccxt.async_support`` to query public endpoints of cryptocurrency
 exchanges. Binance is the default venue because of generous public
 rate limits and broad pair coverage.
 
-All calls use ``to_thread`` under the hood because ccxt's async API is
-somewhat leaky with sync side-effects. The call site of ``fetch_ticker``
-etc. is the public coroutine (no sync blocking in handlers).
+**Lazy import** (spec FASE 5 pre-polish): ``ccxt.async_support`` eagerly
+registers 100+ exchange classes at import time (~50 MiB RSS). We defer
+the import to the first call so the uvicorn startup doesn't pay that
+cost, and we import the single exchange submodule directly instead of
+the whole aggregator.
+
+All calls use ``asyncio.to_thread``-free paths because ccxt's async
+client already uses aiohttp under the hood; the only reason we wrap
+anything is the sync bootstrap in ``_get_exchange``.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any, ClassVar, cast
-
-import ccxt.async_support as ccxt_async
+from typing import TYPE_CHECKING, Any, ClassVar, cast
 
 from mib.logger import logger
 from mib.models.market import Candle, Quote
 from mib.sources.base import DataSource, RateLimiter, SourceError
+
+# TYPE_CHECKING ensures this import runs only under mypy, not at runtime.
+if TYPE_CHECKING:  # pragma: no cover
+    import ccxt.async_support as ccxt_async  # noqa: F401
 
 # TTLs match spec §4.
 _TTL_TICKER_SEC = 30
@@ -38,13 +46,24 @@ class CCXTSource(DataSource):
         # Binance public endpoints allow ~1200 req/min; we stay well below.
         super().__init__(rate_limiter=RateLimiter(max_calls=20, period_seconds=60.0))
         self._exchange_id = exchange_id
-        self._exchange: ccxt_async.Exchange | None = None
+        # Typed as Any to avoid triggering the ccxt import at class-load time.
+        self._exchange: Any = None
 
-    def _get_exchange(self) -> ccxt_async.Exchange:
+    def _get_exchange(self) -> Any:
+        """Lazy bootstrap of the exchange client on first call."""
         if self._exchange is None:
-            cls = getattr(ccxt_async, self._exchange_id, None)
-            if cls is None:
-                raise SourceError(f"Unknown CCXT exchange: {self._exchange_id}")
+            # Importing the specific submodule avoids the top-level
+            # `ccxt.async_support.__init__` which eagerly registers every
+            # exchange class (Bybit, Kraken, Bitfinex, 100+ more).
+            import importlib  # noqa: PLC0415
+
+            try:
+                mod = importlib.import_module(
+                    f"ccxt.async_support.{self._exchange_id}"
+                )
+                cls = getattr(mod, self._exchange_id)
+            except (ImportError, AttributeError) as exc:
+                raise SourceError(f"Unknown CCXT exchange: {self._exchange_id}") from exc
             self._exchange = cls({"enableRateLimit": True})
         return self._exchange
 
