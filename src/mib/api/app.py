@@ -15,6 +15,7 @@ from mib import __version__
 from mib.api.dependencies import shutdown_sources
 from mib.api.routers import health, symbol
 from mib.logger import logger
+from mib.scheduler import start_scheduler, stop_scheduler
 
 
 @asynccontextmanager
@@ -25,8 +26,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     but unused here; prefixed with ``_`` so ruff's ARG lint is happy.
     """
     logger.info("mib api starting · version={}", __version__)
+    start_scheduler()
     yield
     logger.info("mib api stopping")
+    stop_scheduler()
     await shutdown_sources()
 
 

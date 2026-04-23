@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.pool import StaticPool
 
 from mib.config import get_settings
 from mib.logger import logger
@@ -31,13 +32,26 @@ class Base(DeclarativeBase):
 # Echo only if explicitly in debug mode — never in production.
 _echo = _settings.log_level == "DEBUG" and _settings.app_env != "production"
 
+
+def _build_engine_kwargs() -> dict[str, object]:
+    """Engine kwargs tailored to the backing DB.
+
+    In-memory SQLite (``sqlite:///:memory:`` or aiosqlite equivalent) needs a
+    ``StaticPool`` so every ``AsyncSession`` talks to the *same* in-memory
+    database — otherwise each connection opens its own empty instance and the
+    tables disappear between calls.
+    """
+    url = _settings.database_url
+    if ":memory:" in url:
+        return {"poolclass": StaticPool, "connect_args": {"check_same_thread": False}}
+    return {"connect_args": {"timeout": 30}}
+
+
 engine = create_async_engine(
     _settings.database_url,
     echo=_echo,
     future=True,
-    # Single connection is enough for a single-user bot (spec §11bis).
-    # We rely on SQLite's serialisation and WAL for concurrency.
-    connect_args={"timeout": 30},
+    **_build_engine_kwargs(),  # type: ignore[arg-type]
 )
 
 async_session_factory = async_sessionmaker(

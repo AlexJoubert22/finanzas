@@ -21,9 +21,11 @@ class HealthResponse(BaseModel):
     db_ok: bool = Field(
         description="True if a trivial query against the SQLite DB succeeded.",
     )
-    sources_status: dict[str, Literal["ok", "degraded", "down", "not_configured"]] = Field(
+    sources_status: dict[
+        str, Literal["ok", "degraded", "down", "not_configured", "not_yet_probed"]
+    ] = Field(
         default_factory=dict,
-        description="Per-source liveness map; populated in phase 2+.",
+        description="Per-source liveness map; populated by APScheduler probe every 5 min.",
     )
     ai_quotas: dict[str, float] = Field(
         default_factory=dict,

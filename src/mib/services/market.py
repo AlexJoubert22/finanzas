@@ -16,6 +16,7 @@ from mib.logger import logger
 from mib.models.market import Candle, Quote, SymbolResponse, TechnicalRating
 from mib.sources.ccxt_source import CCXTSource
 from mib.sources.tradingview_ta import TradingViewTASource
+from mib.sources.tv_exchange_map import is_forex_or_futures, resolve_tv_exchange
 from mib.sources.yfinance_source import YFinanceSource
 
 TickerKind = Literal["crypto", "stock"]
@@ -135,13 +136,17 @@ class MarketService:
     ) -> TechnicalRating | None:
         if self._tv is None:
             return None
-        # TV expects `BTCUSDT` for crypto (no slash) and `AAPL` as-is for stocks.
+        # TV doesn't understand Yahoo forex/futures suffixes; skip enrichment.
+        if is_forex_or_futures(symbol):
+            return None
         if kind == "crypto":
             tv_symbol = symbol.replace("/", "")
             exchange = "BINANCE"
         else:
-            tv_symbol = symbol
-            exchange = "NASDAQ"  # best-effort; TV tolerates mismatches with a retry
+            # Resolve the real exchange (NASDAQ / NYSE / AMEX / INDEX …).
+            # Stocks not in the curated map fall back to NASDAQ with a
+            # clean soft-fail on mismatch.
+            exchange, tv_symbol = resolve_tv_exchange(symbol)
         try:
             return await self._tv.fetch_rating(
                 tv_symbol, kind=kind, exchange=exchange, timeframe=timeframe

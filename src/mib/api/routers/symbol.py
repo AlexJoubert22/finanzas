@@ -30,7 +30,7 @@ async def get_symbol(
         pattern=r"^(1m|5m|15m|30m|1h|4h|1d|1wk)$",
         description="OHLCV interval.",
     ),
-    limit: int = Query(default=100, ge=10, le=500, description="Max candles to return."),
+    limit: int = Query(default=100, ge=1, le=500, description="Max candles to return."),
     service: MarketService = Depends(get_market_service),
 ) -> SymbolResponse:
     """Return the latest quote and OHLCV bars for ``ticker``.

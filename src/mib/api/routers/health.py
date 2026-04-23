@@ -18,6 +18,7 @@ from mib import __version__
 from mib.db.session import get_session
 from mib.logger import logger
 from mib.models.health import HealthResponse
+from mib.services.health_probe import get_health_cache
 
 router = APIRouter(tags=["health"])
 
@@ -43,15 +44,23 @@ async def health(session: AsyncSession = Depends(get_session)) -> HealthResponse
     AI quota maps stay empty until their subsystems land (phases 2-4).
     """
     db_ok = await _db_ok(session)
+    sources_status = get_health_cache().snapshot()
 
-    # Aggregate status: in phase 1 we only know about DB, so that's the
-    # single failure mode. Later phases will factor sources and AI quotas.
-    status = "ok" if db_ok else "down"
+    # Aggregate rule:
+    #   down       = DB down (hard blocker)
+    #   degraded   = any source down / degraded
+    #   ok         = DB ok and every probed source ok
+    if not db_ok:
+        status = "down"
+    elif any(v in {"down", "degraded"} for v in sources_status.values()):
+        status = "degraded"
+    else:
+        status = "ok"
 
     return HealthResponse(
         status=status,
         db_ok=db_ok,
-        sources_status={},
+        sources_status=sources_status,  # type: ignore[arg-type]
         ai_quotas={},
         uptime_seconds=int(time.monotonic() - _STARTED_AT),
         version=__version__,
