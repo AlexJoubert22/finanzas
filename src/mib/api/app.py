@@ -15,20 +15,30 @@ from mib import __version__
 from mib.api.dependencies import shutdown_sources
 from mib.api.routers import ask, health, macro, news, scan, symbol
 from mib.logger import logger
-from mib.scheduler import start_scheduler, stop_scheduler
+from mib.scheduler import register_bot_jobs, start_scheduler, stop_scheduler
+from mib.telegram.bot import start_bot, stop_bot
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Startup/shutdown hooks — logged so we can trace boot order.
 
-    The ``app`` argument is required by FastAPI's lifespan contract
-    but unused here; prefixed with ``_`` so ruff's ARG lint is happy.
+    Boot order is deliberate:
+        1. ``start_scheduler()`` — registers the source health probe.
+        2. ``start_bot()`` — polling starts in the same asyncio loop.
+        3. ``register_bot_jobs()`` — 3 Telegram jobs can now call
+           ``app.bot.send_message``.
+
+    Shutdown runs in reverse so the bot stops accepting updates
+    before the scheduler starts tearing down jobs.
     """
     logger.info("mib api starting · version={}", __version__)
     start_scheduler()
+    await start_bot()
+    register_bot_jobs()
     yield
     logger.info("mib api stopping")
+    await stop_bot()
     stop_scheduler()
     await shutdown_sources()
 

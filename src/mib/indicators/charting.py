@@ -1,28 +1,41 @@
 """Candlestick chart PNG generator backed by ``mplfinance``.
 
-Used by the Telegram ``/chart`` command (fase 5+). Returns raw bytes so
-the handler can pipe them straight into Telegram's ``send_photo`` without
-a temporary file.
+Used by the Telegram ``/chart`` command. Returns the **path** to a PNG
+written to ``/tmp`` so the Telegram handler can ``send_photo`` by path
+and unlink the file afterwards — keeping the big PNG out of Python RAM.
 
-**Lazy imports** (spec FASE 5 pre-polish): ``matplotlib`` + ``mplfinance``
-pesan ~35 MiB en RSS cuando se importan en eager mode — y la aplicación
-no los necesita en ``/symbol``, ``/macro``, ``/news``, ``/ask`` ni
-``/scan``. Los diferimos al primer ``render_candles_png()`` para que el
-baseline del container no pague ese coste sin usarlos.
+Three RAM-safety mitigations applied since inception (FASE 5 plan):
 
-Matplotlib is not thread-safe; we always run the render inside
-``asyncio.to_thread`` so the event loop stays responsive.
+1. **Bounded concurrency** — ``asyncio.Semaphore(2)`` caps the number
+   of concurrent renders. A 3rd request waits; if the wait + render
+   exceeds the hard timeout, the handler gets ``None`` and tells the
+   user "chart temporalmente no disponible".
+2. **Hard timeout 5s** per render via ``asyncio.wait_for``. Matplotlib
+   doesn't honour cooperative cancellation inside the thread, but we
+   stop awaiting so the coroutine returns fast and the user isn't
+   blocked. The leaked thread finishes in background and gets GC'd.
+3. **``plt.close('all')``** after every successful render to release
+   figure handles and matplotlib's internal axes registry. Without this
+   the figures accumulate and drag RAM up by ~10 MiB per chart.
+
+**Lazy imports**: ``matplotlib`` + ``mplfinance`` pesan ~35 MiB en RSS
+y la mayoría de los endpoints no los necesitan; los diferimos al primer
+``render_candles_png()``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
+import uuid
 from functools import lru_cache
-from io import BytesIO
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
+
+from mib.logger import logger
 
 # ─── Lazy mplfinance/matplotlib bootstrap ─────────────────────────────
 
@@ -31,6 +44,12 @@ import pandas as pd
 # not fight ``install -d -o mib ... /app``.
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib-cache")
 
+# Bounded concurrency — mitigation 1 of FASE 5.
+_RENDER_SEM = asyncio.Semaphore(2)
+
+# Hard per-render budget.
+_RENDER_TIMEOUT_S = 5.0
+
 
 @lru_cache(maxsize=1)
 def _mpf() -> Any:
@@ -38,6 +57,17 @@ def _mpf() -> Any:
     import mplfinance as mpf  # noqa: PLC0415 - intentional lazy import
 
     return mpf
+
+
+@lru_cache(maxsize=1)
+def _plt() -> Any:
+    """Import matplotlib.pyplot once on first chart request."""
+    import matplotlib  # noqa: PLC0415
+
+    matplotlib.use("Agg")  # no GUI backend inside the container
+    import matplotlib.pyplot as plt  # noqa: PLC0415
+
+    return plt
 
 
 @lru_cache(maxsize=1)
@@ -66,52 +96,82 @@ async def render_candles_png(
     title: str,
     timeframe: str,
     overlays: list[pd.Series] | None = None,
-) -> bytes:
-    """Render ``df`` as a candlestick PNG and return its bytes.
+) -> str | None:
+    """Render ``df`` as a candlestick PNG on disk and return its path.
+
+    Returns ``None`` if the semaphore slot or the 5 s budget is not met
+    — the Telegram handler interprets ``None`` as "chart temporalmente
+    no disponible" without surfacing a stack trace.
 
     Args:
         df: DataFrame with columns ``Open``, ``High``, ``Low``, ``Close``,
-            ``Volume`` (mplfinance's expected casing) and a
-            ``DatetimeIndex``. Feed it normalised by the caller.
-        title: Title at the top of the chart (``BTC/USDT · 1h`` for example).
-        timeframe: Short string rendered as a subtitle; purely cosmetic.
-        overlays: Optional extra series plotted on the same axes as the
-            candles (e.g. EMA-20, EMA-50). Series must share the index.
+            ``Volume`` and a ``DatetimeIndex``.
+        title: Title at the top of the chart.
+        timeframe: Short subtitle (cosmetic).
+        overlays: Optional extra series (EMA-20/50) sharing the index.
 
     Returns:
-        PNG bytes.
+        Path to the PNG inside ``/tmp`` (caller must ``os.unlink`` after
+        sending), or ``None`` on timeout / shed.
     """
     mpf = _mpf()
     style = _style()
+    plt = _plt()
+
+    out_path = Path(f"/tmp/mib-chart-{uuid.uuid4().hex}.png")
 
     addplots: list[Any] = []
     if overlays:
         addplots = [mpf.make_addplot(s, width=1.0) for s in overlays]
 
-    def _render() -> bytes:
-        buf = BytesIO()
-        mpf.plot(
-            df,
-            type="candle",
-            style=style,
-            volume=True,
-            title=f"{title}  ·  {timeframe}",
-            ylabel="Price",
-            ylabel_lower="Volume",
-            figsize=(10, 6),
-            addplot=addplots,
-            savefig={
-                "fname": buf,
-                "dpi": 110,
-                "format": "png",
-                "bbox_inches": "tight",
-                "pad_inches": 0.2,
-            },
-            returnfig=False,
-        )
-        return buf.getvalue()
+    def _render() -> None:
+        try:
+            mpf.plot(
+                df,
+                type="candle",
+                style=style,
+                volume=True,
+                title=f"{title}  ·  {timeframe}",
+                ylabel="Price",
+                ylabel_lower="Volume",
+                figsize=(10, 6),
+                addplot=addplots,
+                savefig={
+                    "fname": str(out_path),
+                    "dpi": 100,
+                    "format": "png",
+                    "bbox_inches": "tight",
+                    "pad_inches": 0.2,
+                },
+                returnfig=False,
+            )
+        finally:
+            # Mitigation 3: always release matplotlib figure state so
+            # long-running processes don't accumulate axes registries.
+            plt.close("all")
 
-    return await asyncio.to_thread(_render)
+    try:
+        async with _RENDER_SEM:
+            await asyncio.wait_for(asyncio.to_thread(_render), timeout=_RENDER_TIMEOUT_S)
+    except TimeoutError:
+        logger.info(
+            "charting: render timed out >{}s for {} {}",
+            _RENDER_TIMEOUT_S,
+            title,
+            timeframe,
+        )
+        # Do NOT try to remove the half-written file here — the thread
+        # is still writing. The /tmp orphan will be cleaned up by the
+        # next container restart; in the meantime it's bounded (one
+        # per timeout event).
+        return None
+    except Exception as exc:  # noqa: BLE001 - charting must never crash handlers
+        logger.warning("charting: render failed: {}", exc)
+        with contextlib.suppress(FileNotFoundError):
+            out_path.unlink()
+        return None
+
+    return str(out_path)
 
 
 def candles_dataframe(candles: list[dict[str, float | str]]) -> pd.DataFrame:
