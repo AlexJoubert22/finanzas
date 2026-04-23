@@ -24,6 +24,11 @@ from mib.sources.yfinance_source import YFinanceSource
 
 TickerKind = Literal["crypto", "stock"]
 
+# Minimum OHLCV depth needed to compute every indicator in the spec set.
+# EMA-200 requires 200 bars of close; we pad a bit to give the moving
+# average a stable-state warm-up window.
+_INDICATOR_WARMUP_BARS = 250
+
 # Quote currencies we recognise as crypto-side when a separator is present.
 # Per spec: USDT, USDC, BTC, ETH, EUR, USD.
 _CRYPTO_QUOTES: frozenset[str] = frozenset(
@@ -95,22 +100,35 @@ class MarketService:
         ohlcv_timeframe: str = "1h",
         ohlcv_limit: int = 100,
     ) -> SymbolResponse:
-        """Fetch quote + OHLCV + indicators (+ optional TV rating)."""
+        """Fetch quote + OHLCV + indicators (+ optional TV rating).
+
+        To compute EMA-200 reliably we always fetch at least
+        ``_INDICATOR_WARMUP_BARS`` bars internally, regardless of what the
+        caller asked for in ``ohlcv_limit``. Indicators are calculated on
+        the long history; the ``candles`` returned in the response are
+        truncated back to ``ohlcv_limit`` so the HTTP payload stays small.
+        """
         kind = detect_ticker_kind(raw_ticker)
+        fetch_limit = max(ohlcv_limit, _INDICATOR_WARMUP_BARS)
+
         if kind == "crypto":
             symbol = normalise_crypto_symbol(raw_ticker)
-            quote, candles = await self._get_crypto(symbol, ohlcv_timeframe, ohlcv_limit)
+            quote, full_candles = await self._get_crypto(
+                symbol, ohlcv_timeframe, fetch_limit
+            )
             rating = await self._enrich_tv(symbol, kind, ohlcv_timeframe)
         else:
-            quote, candles = await self._get_stock(
-                raw_ticker.strip(), ohlcv_timeframe, ohlcv_limit
+            quote, full_candles = await self._get_stock(
+                raw_ticker.strip(), ohlcv_timeframe, fetch_limit
             )
             rating = await self._enrich_tv(raw_ticker.strip(), kind, ohlcv_timeframe)
 
-        # Compute the technical snapshot on the OHLCV we already have.
-        # Needs at least ~30 bars to produce anything meaningful; below
-        # that pandas-ta returns NaN and our helper maps it to None.
-        indicators = self._compute_indicators(candles)
+        # Indicators computed on the full warm-up window (up to 250 bars).
+        indicators = self._compute_indicators(full_candles)
+
+        # Candles in the response are the recent-most slice requested by
+        # the consumer — keeps the JSON payload small.
+        candles = full_candles[-ohlcv_limit:] if full_candles else []
 
         return SymbolResponse(
             quote=quote,

@@ -138,6 +138,20 @@ class YFinanceSource(DataSource):
                 out[attr] = getattr(fi, attr)
             except (AttributeError, KeyError):
                 out[attr] = None
+
+        # Fallback for Yahoo indices (^GSPC, ^VIX, …): fast_info sometimes
+        # leaves `previous_close` as None. Pull the last two daily closes
+        # from history and use the penultimate as the reference for
+        # change_pct. Guarded: if history also fails we leave the field
+        # None and the service layer handles it (change_pct = None is
+        # legal per the Quote model).
+        if out.get("previous_close") is None:
+            try:
+                hist = t.history(period="5d", interval="1d", auto_adjust=False)
+                if hist is not None and len(hist) >= 2:
+                    out["previous_close"] = float(hist["Close"].iloc[-2])
+            except Exception:  # noqa: BLE001 - fallback is strictly best-effort
+                pass
         return out
 
     @staticmethod

@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+import pandas as pd
 import pytest
 
 
@@ -35,6 +36,72 @@ async def test_yf_fetch_quote_computes_change_pct(
     assert quote.change_24h_pct == pytest.approx(25.0)
     assert quote.currency == "USD"
     assert quote.venue == "NASDAQ"
+
+
+@pytest.mark.asyncio
+async def test_yf_fetch_quote_falls_back_to_history_when_prev_close_none(
+    monkeypatch: pytest.MonkeyPatch, fresh_db: None  # noqa: ARG001
+) -> None:
+    """Yahoo indices (^GSPC, ^VIX) sometimes have `previous_close=None` in
+    fast_info; we must fall back to history()[Close].iloc[-2]."""
+    from mib.sources import yfinance_source as mod
+
+    # Fake fast_info with previous_close=None — our production path simulates
+    # a Yahoo index quote.
+    class _FakeFastInfo:
+        last_price = 7128.92
+        previous_close = None
+        currency = "USD"
+        exchange = "SNP"
+
+    class _FakeTicker:
+        def __init__(self, _ticker: str) -> None:
+            self.fast_info = _FakeFastInfo()
+
+        def history(self, period: str, interval: str, auto_adjust: bool) -> pd.DataFrame:  # noqa: ARG002
+            # Two daily closes: yesterday 7136.76, today (placeholder).
+            return pd.DataFrame({"Close": [7120.10, 7136.76, 7128.92]})
+
+    monkeypatch.setattr(mod, "yf", type("_YF", (), {"Ticker": _FakeTicker}))
+
+    src = mod.YFinanceSource()
+    quote = await src.fetch_quote("^GSPC")
+
+    # Fallback should have kicked in: change_pct = (7128.92 - 7136.76) / 7136.76 * 100 ≈ -0.11 %
+    assert quote.change_24h_pct is not None
+    assert quote.change_24h_pct == pytest.approx(
+        (7128.92 - 7136.76) / 7136.76 * 100.0, rel=1e-3
+    )
+
+
+@pytest.mark.asyncio
+async def test_yf_fetch_quote_falls_back_gracefully_on_history_failure(
+    monkeypatch: pytest.MonkeyPatch, fresh_db: None  # noqa: ARG001
+) -> None:
+    """If history() explodes, fallback must swallow it and leave change_pct None."""
+    from mib.sources import yfinance_source as mod
+
+    class _FakeFastInfo:
+        last_price = 100.0
+        previous_close = None
+        currency = "USD"
+        exchange = "NASDAQ"
+
+    class _FakeTicker:
+        def __init__(self, _ticker: str) -> None:
+            self.fast_info = _FakeFastInfo()
+
+        def history(self, period: str, interval: str, auto_adjust: bool) -> pd.DataFrame:  # noqa: ARG002
+            raise RuntimeError("transient yahoo outage")
+
+    monkeypatch.setattr(mod, "yf", type("_YF", (), {"Ticker": _FakeTicker}))
+
+    src = mod.YFinanceSource()
+    quote = await src.fetch_quote("^BOGUS")
+
+    # No previous_close anywhere → None. Must NOT raise.
+    assert quote.change_24h_pct is None
+    assert quote.price == pytest.approx(100.0)
 
 
 @pytest.mark.asyncio
