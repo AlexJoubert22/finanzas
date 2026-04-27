@@ -31,6 +31,20 @@ from typing import Literal
 
 Side = Literal["long", "short", "flat"]
 
+# Lifecycle states for a stored signal. The thesis itself is immutable
+# once persisted; only this status changes — to "consumed" when the
+# Telegram operator approves and (FASE 9+) the executor opens a
+# matching trade, "cancelled" when discarded, "expired" when the entry
+# zone is no longer reachable. The DB enforces the same set via a
+# check constraint.
+SignalStatus = Literal["pending", "expired", "consumed", "cancelled"]
+SIGNAL_STATUSES: tuple[SignalStatus, ...] = (
+    "pending",
+    "expired",
+    "consumed",
+    "cancelled",
+)
+
 # Strategy ids must be namespaced + versioned so historical signals
 # remain traceable to the algorithm that produced them. Examples that
 # pass: ``scanner.oversold.v1``, ``ai.macro_breakout.v3``. Examples that
@@ -152,6 +166,25 @@ class Signal:
                     f"short: target_2 {self.target_2} must be < "
                     f"target_1 {self.target_1}"
                 )
+
+
+# ─── Persisted wrapper ──────────────────────────────────────────────
+
+@dataclass(frozen=True)
+class PersistedSignal:
+    """A :class:`Signal` plus the row metadata the repository owns.
+
+    The thesis (``signal``) is the immutable value object; ``id`` and
+    ``status`` are storage artefacts. Handlers that only care about the
+    thesis (e.g. the executor) accept :class:`Signal`; handlers that
+    need to address a stored row by id (Telegram callbacks, status
+    transitions) accept this wrapper.
+    """
+
+    id: int
+    status: SignalStatus
+    signal: Signal
+    status_updated_at: datetime
 
 
 # ─── Derivation helpers ─────────────────────────────────────────────
