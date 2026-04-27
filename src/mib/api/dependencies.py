@@ -25,6 +25,7 @@ from mib.sources.fred import FREDSource
 from mib.sources.rss import RSSSource
 from mib.sources.tradingview_ta import TradingViewTASource
 from mib.sources.yfinance_source import YFinanceSource
+from mib.trading.strategy import StrategyEngine
 
 _ccxt: CCXTReader | None = None
 _yf: YFinanceSource | None = None
@@ -42,6 +43,7 @@ _news: NewsService | None = None
 _ai_router: AIRouter | None = None
 _ai_service: AIService | None = None
 _scanner: ScannerService | None = None
+_strategy_engine: StrategyEngine | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -159,6 +161,14 @@ def get_scanner_service() -> ScannerService:
     if _scanner is None:
         _scanner = ScannerService(market=get_market_service())
     return _scanner
+
+
+def get_strategy_engine() -> StrategyEngine:
+    """FASE 7+ trading entrypoint — produces ``list[Signal]`` from presets."""
+    global _strategy_engine  # noqa: PLW0603
+    if _strategy_engine is None:
+        _strategy_engine = StrategyEngine(market=get_market_service())
+    return _strategy_engine
 
 
 async def shutdown_sources() -> None:
