@@ -50,6 +50,11 @@ class TaskType(StrEnum):
     ANALYSIS = "analysis"
     REASONING = "reasoning"
     SUMMARY = "summary"
+    # Trading-layer types reserved for FASE 11. Their fallback chains are
+    # registered as empty placeholders so the enum + router API stay stable;
+    # the router rejects calls against them until the chains get populated.
+    TRADE_VALIDATE = "trade_validate"
+    TRADE_POSTMORTEM = "trade_postmortem"
 
 
 class ProviderId(StrEnum):

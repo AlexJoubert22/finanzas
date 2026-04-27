@@ -62,6 +62,10 @@ FALLBACK_CHAINS: dict[TaskType, list[ChainStep]] = {
         ChainStep(ProviderId.GROQ, GROQ_8B),
         ChainStep(ProviderId.OPENROUTER, OPENROUTER_SUMMARY),
     ],
+    # FASE 11 placeholders — left empty on purpose so the router returns a
+    # clear "not yet wired" failure instead of falling through to a default.
+    TaskType.TRADE_VALIDATE: [],
+    TaskType.TRADE_POSTMORTEM: [],
 }
 
 
@@ -91,11 +95,20 @@ class AIRouter:
         the caller can render a degraded response without IA.
         """
         chain = FALLBACK_CHAINS.get(task.task_type)
-        if not chain:
+        if chain is None:
             return AIResponse.failed(
                 provider=ProviderId.GROQ,
                 model="",
                 error=f"no fallback chain for task_type={task.task_type}",
+            )
+        if not chain:
+            return AIResponse.failed(
+                provider=ProviderId.GROQ,
+                model="",
+                error=(
+                    f"task_type={task.task_type} has an empty fallback chain "
+                    "(reserved placeholder, not yet wired)"
+                ),
             )
 
         last_error: str = "no provider attempted"
