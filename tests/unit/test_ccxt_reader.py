@@ -1,4 +1,4 @@
-"""Unit tests for CCXTSource using a monkeypatched ccxt exchange client."""
+"""Unit tests for CCXTReader (read-only side of the trading split)."""
 
 from __future__ import annotations
 
@@ -45,9 +45,9 @@ def fake_ccxt(monkeypatch: pytest.MonkeyPatch) -> _FakeExchange:
     def _patched_exchange(self: object) -> _FakeExchange:  # noqa: ARG001
         return fake
 
-    from mib.sources import ccxt_source
+    from mib.sources import ccxt_reader
 
-    monkeypatch.setattr(ccxt_source.CCXTSource, "_get_exchange", _patched_exchange)
+    monkeypatch.setattr(ccxt_reader.CCXTReader, "_get_exchange", _patched_exchange)
     return fake
 
 
@@ -55,9 +55,9 @@ def fake_ccxt(monkeypatch: pytest.MonkeyPatch) -> _FakeExchange:
 async def test_ccxt_fetch_quote_maps_fields(
     fake_ccxt: _FakeExchange, fresh_db: None  # noqa: ARG001
 ) -> None:
-    from mib.sources.ccxt_source import CCXTSource
+    from mib.sources.ccxt_reader import CCXTReader
 
-    src = CCXTSource(exchange_id="binance")
+    src = CCXTReader(exchange_id="binance")
     quote = await src.fetch_quote("BTC/USDT")
 
     assert quote.ticker == "BTC/USDT"
@@ -74,9 +74,9 @@ async def test_ccxt_fetch_quote_maps_fields(
 async def test_ccxt_fetch_ohlcv_returns_candles(
     fake_ccxt: _FakeExchange, fresh_db: None  # noqa: ARG001
 ) -> None:
-    from mib.sources.ccxt_source import CCXTSource
+    from mib.sources.ccxt_reader import CCXTReader
 
-    src = CCXTSource(exchange_id="binance")
+    src = CCXTReader(exchange_id="binance")
     candles = await src.fetch_ohlcv("BTC/USDT", timeframe="1h", limit=2)
 
     assert len(candles) == 2
@@ -90,9 +90,9 @@ async def test_ccxt_fetch_ohlcv_returns_candles(
 async def test_ccxt_second_call_hits_cache(
     fake_ccxt: _FakeExchange, fresh_db: None  # noqa: ARG001
 ) -> None:
-    from mib.sources.ccxt_source import CCXTSource
+    from mib.sources.ccxt_reader import CCXTReader
 
-    src = CCXTSource(exchange_id="binance")
+    src = CCXTReader(exchange_id="binance")
     await src.fetch_quote("BTC/USDT")
     await src.fetch_quote("BTC/USDT")  # should hit cache
     # Loader went to the exchange only once.

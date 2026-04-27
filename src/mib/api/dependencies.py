@@ -18,7 +18,7 @@ from mib.services.market import MarketService
 from mib.services.news import NewsService
 from mib.services.scanner import ScannerService
 from mib.sources.alphavantage import AlphaVantageSource
-from mib.sources.ccxt_source import CCXTSource
+from mib.sources.ccxt_reader import CCXTReader
 from mib.sources.coingecko import CoinGeckoSource
 from mib.sources.finnhub import FinnhubSource
 from mib.sources.fred import FREDSource
@@ -26,7 +26,7 @@ from mib.sources.rss import RSSSource
 from mib.sources.tradingview_ta import TradingViewTASource
 from mib.sources.yfinance_source import YFinanceSource
 
-_ccxt: CCXTSource | None = None
+_ccxt: CCXTReader | None = None
 _yf: YFinanceSource | None = None
 _tv: TradingViewTASource | None = None
 _cg: CoinGeckoSource | None = None
@@ -46,10 +46,10 @@ _scanner: ScannerService | None = None
 
 # ─── Source singletons ────────────────────────────────────────────────
 
-def get_ccxt_source() -> CCXTSource:
+def get_ccxt_source() -> CCXTReader:
     global _ccxt  # noqa: PLW0603
     if _ccxt is None:
-        _ccxt = CCXTSource(exchange_id="binance")
+        _ccxt = CCXTReader(exchange_id="binance")
     return _ccxt
 
 

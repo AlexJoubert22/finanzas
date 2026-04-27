@@ -17,7 +17,7 @@ import pandas as pd
 from mib.indicators.technical import compute_snapshot
 from mib.logger import logger
 from mib.models.market import Candle, Quote, SymbolResponse, TechnicalRating, TechnicalSnapshot
-from mib.sources.ccxt_source import CCXTSource
+from mib.sources.ccxt_reader import CCXTReader
 from mib.sources.tradingview_ta import TradingViewTASource
 from mib.sources.tv_exchange_map import is_forex_or_futures, resolve_tv_exchange
 from mib.sources.yfinance_source import YFinanceSource
@@ -85,7 +85,7 @@ class MarketService:
 
     def __init__(
         self,
-        ccxt_source: CCXTSource,
+        ccxt_source: CCXTReader,
         yfinance_source: YFinanceSource,
         tv_source: TradingViewTASource | None = None,
     ) -> None:

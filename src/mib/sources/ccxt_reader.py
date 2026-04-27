@@ -1,8 +1,12 @@
-"""CCXT-backed crypto data source.
+"""CCXT-backed crypto data source — read-only side of the split.
 
 Uses ``ccxt.async_support`` to query public endpoints of cryptocurrency
 exchanges. Binance is the default venue because of generous public
 rate limits and broad pair coverage.
+
+This module is the read-only half of the trading split (FASE 7+
+prep): it must NEVER carry exchange API keys with order permissions.
+The write side lives in :mod:`mib.sources.ccxt_trader`.
 
 **Lazy import** (spec FASE 5 pre-polish): ``ccxt.async_support`` eagerly
 registers 100+ exchange classes at import time (~50 MiB RSS). We defer
@@ -33,7 +37,7 @@ _TTL_TICKER_SEC = 30
 _TTL_OHLCV_SEC = 30
 
 
-class CCXTSource(DataSource):
+class CCXTReader(DataSource):
     """Spot-market data from public CCXT endpoints.
 
     Attributes:
