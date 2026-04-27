@@ -14,6 +14,8 @@ from typing import Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from mib.trading.mode import TradingMode
+
 
 class Settings(BaseSettings):
     """Runtime configuration loaded from environment."""
@@ -65,6 +67,15 @@ class Settings(BaseSettings):
     price_alerts_interval_sec: int = Field(default=60, ge=10)
     watchlist_interval_sec: int = Field(default=300, ge=60)
     news_monitor_interval_sec: int = Field(default=900, ge=60)
+
+    # ─── Trading (FASE 7+) ──────────────────────────────────────────
+    # Master kill switch: when False, no order leaves the process even
+    # if the executor is invoked. The CCXTTrader also short-circuits on
+    # this flag as a second seatbelt. Default False — flip to True only
+    # after PAPER validation.
+    trading_enabled: bool = False
+    # Operational mode ladder; see ``mib.trading.mode.TradingMode``.
+    trading_mode: TradingMode = TradingMode.OFF
 
     # ─── Runtime tuning ─────────────────────────────────────────────
     malloc_arena_max: int = 2
