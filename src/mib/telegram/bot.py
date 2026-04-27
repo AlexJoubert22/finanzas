@@ -33,6 +33,10 @@ from mib.telegram.handlers.macro import macro as macro_handler
 from mib.telegram.handlers.news import news as news_handler
 from mib.telegram.handlers.price import price as price_handler
 from mib.telegram.handlers.scan import scan as scan_handler
+from mib.telegram.handlers.signals import (
+    on_signal_callback,
+    signals_cmd,
+)
 from mib.telegram.handlers.start import help_cmd
 from mib.telegram.handlers.start import start as start_handler
 from mib.telegram.handlers.status import status as status_handler
@@ -82,10 +86,12 @@ def build_application() -> BotApp:
     app.add_handler(CommandHandler("alerts", alerts_handler))
     app.add_handler(CommandHandler("ask", ask_handler))
     app.add_handler(CommandHandler("status", status_handler))
+    app.add_handler(CommandHandler("signals", signals_cmd))
 
     # Inline buttons
     app.add_handler(CallbackQueryHandler(on_price_callback, pattern=r"^price:"))
     app.add_handler(CallbackQueryHandler(on_alert_delete, pattern=r"^alert:del:"))
+    app.add_handler(CallbackQueryHandler(on_signal_callback, pattern=r"^sig:"))
 
     return app
 
