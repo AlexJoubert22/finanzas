@@ -45,6 +45,11 @@ def test_compute_snapshot_returns_all_fields(btc_ohlcv: pd.DataFrame) -> None:
     assert snap.bb_upper is not None
     assert snap.bb_lower < snap.bb_middle < snap.bb_upper
     assert snap.adx_14 is not None and snap.adx_14 >= 0.0
+    # ATR is a strictly positive distance — anything else means pandas-ta
+    # changed semantics or our adapter dropped the column. The FASE 7
+    # strategy engine relies on this being usable to derive stops.
+    assert snap.atr_14 is not None
+    assert snap.atr_14 > 0.0
 
 
 def test_compute_snapshot_with_insufficient_history() -> None:
@@ -68,6 +73,7 @@ def test_compute_snapshot_with_insufficient_history() -> None:
         snap.macd,
         snap.ema_200,
         snap.bb_lower,
+        snap.atr_14,
         snap.adx_14,
     ):
         assert f is None or (isinstance(f, float) and f == f)  # f == f → not NaN

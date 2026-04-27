@@ -78,10 +78,14 @@ class TechnicalSnapshot(BaseModel):
     ema_20: float | None = None
     ema_50: float | None = None
     ema_200: float | None = None
-    # Volatility
+    # Volatility — bands
     bb_lower: float | None = None
     bb_middle: float | None = None
     bb_upper: float | None = None
+    # Volatility — true range. Used by the FASE 7 strategy engine to
+    # derive `Signal.invalidation` (= entry ± k·ATR). A signal cannot be
+    # emitted if this field is None.
+    atr_14: float | None = None
     # Trend strength
     adx_14: float | None = None
 

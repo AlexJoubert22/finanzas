@@ -44,6 +44,8 @@ def compute_snapshot(df: pd.DataFrame) -> TechnicalSnapshot:
     ema50 = pta.ema(close, length=50)
     ema200 = pta.ema(close, length=200)
     bb_df = pta.bbands(close, length=20, std=2)
+    # pandas-ta returns a Series named ``ATRr_14`` (RMA-smoothed default).
+    atr = pta.atr(high, low, close, length=14)
     adx_df = pta.adx(high, low, close, length=14)
 
     return TechnicalSnapshot(
@@ -58,6 +60,7 @@ def compute_snapshot(df: pd.DataFrame) -> TechnicalSnapshot:
         bb_lower=_safe_last(bb_df, col="BBL_20_2.0_2.0"),
         bb_middle=_safe_last(bb_df, col="BBM_20_2.0_2.0"),
         bb_upper=_safe_last(bb_df, col="BBU_20_2.0_2.0"),
+        atr_14=_safe_last(atr),
         adx_14=_safe_last(adx_df, col="ADX_14"),
     )
 
