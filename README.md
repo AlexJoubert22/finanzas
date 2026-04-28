@@ -92,6 +92,8 @@ clean        limpiar caches (no toca .venv ni data/)
 ## Documentación relacionada
 
 - [`PROJECT.md`](./PROJECT.md) — spec completa
+- [`ROADMAP.md`](./ROADMAP.md) — long-horizon strategy doc covering FASES 8-42
+- [`docs/PHASE-MAP.md`](./docs/PHASE-MAP.md) — mapa panorámico de fases con dependencias
 - [`scripts/validate_pandas_ta.py`](./scripts/validate_pandas_ta.py) — script de validación
   de indicadores técnicos (cross-check con `ta` de Bukosabino)
 
