@@ -10,6 +10,7 @@ from mib.ai.models import ProviderId
 from mib.ai.providers.base import AIProvider
 from mib.ai.providers.gemini_provider import GeminiProvider
 from mib.ai.providers.groq_provider import GroqProvider
+from mib.ai.providers.nvidia_provider import NvidiaProvider
 from mib.ai.providers.openrouter_provider import OpenRouterProvider
 from mib.ai.router import AIRouter
 from mib.db.session import async_session_factory
@@ -151,6 +152,7 @@ def get_ai_router() -> AIRouter:
             ProviderId.GROQ: GroqProvider(),
             ProviderId.OPENROUTER: OpenRouterProvider(),
             ProviderId.GEMINI: GeminiProvider(),
+            ProviderId.NVIDIA: NvidiaProvider(),
         }
         _ai_router = AIRouter(providers=providers)
     return _ai_router

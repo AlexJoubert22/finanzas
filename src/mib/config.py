@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_daily_limit: int = 1500
 
+    # NVIDIA Build (NIM API, OpenAI-compatible). Operator has 1-year
+    # subscription. Default daily limit is conservative; raise once
+    # actual usage shape is known.
+    nvidia_api_key: str = ""
+    nvidia_daily_limit: int = 10000
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+
     # ─── Data source keys ───────────────────────────────────────────
     alpha_vantage_api_key: str = ""
     finnhub_api_key: str = ""

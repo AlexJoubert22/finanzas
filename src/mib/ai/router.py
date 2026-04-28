@@ -20,6 +20,10 @@ from mib.ai.models import (
     GEMINI_FLASH_LITE,
     GROQ_8B,
     GROQ_70B,
+    NVIDIA_ANALYSIS,
+    NVIDIA_FAST,
+    NVIDIA_REASONING,
+    NVIDIA_SUMMARY,
     OPENROUTER_ANALYSIS,
     OPENROUTER_FAST,
     OPENROUTER_REASONING,
@@ -39,20 +43,29 @@ class ChainStep:
     model: str
 
 
-# Fallback chains per TaskType (spec §5, adapted to April-2026 inventory).
+# Fallback chains per TaskType (spec §5, adapted to April-2026 inventory
+# + NVIDIA Build added 2026-04-28).
 # First entry = preferred, last = last resort.
+# Rationale for NVIDIA placement:
+#   - REASONING / ANALYSIS: NVIDIA primary (deepseek-r1 + nemotron-super-49b
+#     beat the Groq/OpenRouter free tiers on quality).
+#   - FAST_CLASSIFY / SUMMARY: NVIDIA secondary (Groq is faster for
+#     short-context classification; NVIDIA fills in if Groq throttles).
 FALLBACK_CHAINS: dict[TaskType, list[ChainStep]] = {
     TaskType.FAST_CLASSIFY: [
         ChainStep(ProviderId.GROQ, GROQ_8B),
+        ChainStep(ProviderId.NVIDIA, NVIDIA_FAST),
         ChainStep(ProviderId.GEMINI, GEMINI_FLASH_LITE),
         ChainStep(ProviderId.OPENROUTER, OPENROUTER_FAST),
     ],
     TaskType.ANALYSIS: [
+        ChainStep(ProviderId.NVIDIA, NVIDIA_ANALYSIS),
         ChainStep(ProviderId.GROQ, GROQ_70B),
         ChainStep(ProviderId.OPENROUTER, OPENROUTER_ANALYSIS),
         ChainStep(ProviderId.GEMINI, GEMINI_FLASH),
     ],
     TaskType.REASONING: [
+        ChainStep(ProviderId.NVIDIA, NVIDIA_REASONING),
         ChainStep(ProviderId.OPENROUTER, OPENROUTER_REASONING),
         ChainStep(ProviderId.GEMINI, GEMINI_FLASH),
         ChainStep(ProviderId.GROQ, GROQ_70B),
@@ -60,6 +73,7 @@ FALLBACK_CHAINS: dict[TaskType, list[ChainStep]] = {
     TaskType.SUMMARY: [
         ChainStep(ProviderId.GEMINI, GEMINI_FLASH_LITE),
         ChainStep(ProviderId.GROQ, GROQ_8B),
+        ChainStep(ProviderId.NVIDIA, NVIDIA_SUMMARY),
         ChainStep(ProviderId.OPENROUTER, OPENROUTER_SUMMARY),
     ],
     # FASE 11 placeholders — left empty on purpose so the router returns a
@@ -84,6 +98,7 @@ class AIRouter:
             ProviderId.GROQ: s.groq_daily_limit,
             ProviderId.OPENROUTER: s.openrouter_daily_limit,
             ProviderId.GEMINI: s.gemini_daily_limit,
+            ProviderId.NVIDIA: s.nvidia_daily_limit,
         }
 
     async def complete(self, task: AITask) -> AIResponse:
