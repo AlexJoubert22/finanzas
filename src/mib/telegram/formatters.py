@@ -305,6 +305,59 @@ def fmt_status(payload: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def fmt_signal_card(persisted: Any, *, include_id: bool = True) -> str:
+    """Render a :class:`PersistedSignal` as a Telegram HTML card.
+
+    Layout: side + strategy id, entry zone, stop, both targets with
+    their R-multiple and implied % move, rationale, ``#id`` footer.
+    """
+    sig = persisted.signal
+    low, high = sig.entry_zone
+    entry_mid = (low + high) / 2.0
+    stop_pct = (sig.invalidation - entry_mid) / entry_mid * 100.0
+    t1_pct = (sig.target_1 - entry_mid) / entry_mid * 100.0
+    risk = abs(entry_mid - sig.invalidation)
+    side_emoji = {"long": "🟢", "short": "🔴", "flat": "⚪"}.get(sig.side, "⚪")
+    lines = [
+        f"{side_emoji} <b>{esc(sig.strategy_id)}</b> · <code>{esc(sig.ticker)}</code>",
+        f"Side: {esc(sig.side)} · Strength: {sig.strength:.2f}",
+        "",
+        f"Entry: <code>{fmt_price(low)}</code> – <code>{fmt_price(high)}</code>",
+        f"Stop: <code>{fmt_price(sig.invalidation)}</code> ({stop_pct:+.2f}%)",
+        f"T1 (1R): <code>{fmt_price(sig.target_1)}</code> ({t1_pct:+.2f}%)",
+    ]
+    if sig.target_2 is not None and risk > 0:
+        t2_pct = (sig.target_2 - entry_mid) / entry_mid * 100.0
+        r2 = abs(sig.target_2 - entry_mid) / risk
+        lines.append(
+            f"T2 ({r2:.1f}R): <code>{fmt_price(sig.target_2)}</code> ({t2_pct:+.2f}%)"
+        )
+    if sig.rationale:
+        lines.append("")
+        lines.append(esc(sig.rationale))
+    footer = [f"Status: {esc(persisted.status)}"]
+    if include_id:
+        footer.append(f"#{persisted.id}")
+    lines.append("")
+    lines.append(" · ".join(footer))
+    return "\n".join(lines)
+
+
+def fmt_pending_signals_list(persisted_signals: list[Any]) -> str:
+    """Compact one-line-per-signal summary for ``/signals pending``."""
+    if not persisted_signals:
+        return "No hay signals pendientes."
+    lines = [f"<b>Signals pendientes ({len(persisted_signals)})</b>", ""]
+    for p in persisted_signals:
+        s = p.signal
+        side_emoji = {"long": "🟢", "short": "🔴", "flat": "⚪"}.get(s.side, "⚪")
+        lines.append(
+            f"#{p.id} {side_emoji} <code>{esc(s.ticker)}</code> · "
+            f"{esc(s.strategy_id)} · {fmt_price(s.entry_zone[0])}"
+        )
+    return "\n".join(lines)
+
+
 __all__ = [
     "chunk",
     "direction_emoji",
@@ -314,9 +367,11 @@ __all__ = [
     "fmt_macro_card",
     "fmt_news_list",
     "fmt_pct",
+    "fmt_pending_signals_list",
     "fmt_price",
     "fmt_price_card",
     "fmt_scan_result",
+    "fmt_signal_card",
     "fmt_status",
     "fmt_ts_utc",
     "fmt_watch_created",

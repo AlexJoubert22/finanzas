@@ -116,6 +116,14 @@ exclude = ["src/mib/db/migrations/versions/"]
 module = ["mib.ai.*", "mib.sources.base", "mib.services.*"]
 strict = true
 
+[[tool.mypy.overrides]]
+# FASE 7+: pure trading logic (Signal dataclass, derivation helpers,
+# StrategyEngine) goes strict; the SQLAlchemy repo and the StrEnum
+# module are intentionally left at default to avoid fighting
+# Mapped[T] inference and Enum subclassing edge cases.
+module = ["mib.trading.signals", "mib.trading.strategy"]
+strict = true
+
 # ─────────────────────────────────────────────────────────────────
 # pytest
 # ─────────────────────────────────────────────────────────────────

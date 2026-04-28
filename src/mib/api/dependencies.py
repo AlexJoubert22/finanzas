@@ -12,6 +12,7 @@ from mib.ai.providers.gemini_provider import GeminiProvider
 from mib.ai.providers.groq_provider import GroqProvider
 from mib.ai.providers.openrouter_provider import OpenRouterProvider
 from mib.ai.router import AIRouter
+from mib.db.session import async_session_factory
 from mib.services.ai_service import AIService
 from mib.services.macro import MacroService
 from mib.services.market import MarketService
@@ -25,6 +26,8 @@ from mib.sources.fred import FREDSource
 from mib.sources.rss import RSSSource
 from mib.sources.tradingview_ta import TradingViewTASource
 from mib.sources.yfinance_source import YFinanceSource
+from mib.trading.signal_repo import SignalRepository
+from mib.trading.strategy import StrategyEngine
 
 _ccxt: CCXTReader | None = None
 _yf: YFinanceSource | None = None
@@ -42,6 +45,8 @@ _news: NewsService | None = None
 _ai_router: AIRouter | None = None
 _ai_service: AIService | None = None
 _scanner: ScannerService | None = None
+_strategy_engine: StrategyEngine | None = None
+_signal_repo: SignalRepository | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -159,6 +164,22 @@ def get_scanner_service() -> ScannerService:
     if _scanner is None:
         _scanner = ScannerService(market=get_market_service())
     return _scanner
+
+
+def get_strategy_engine() -> StrategyEngine:
+    """FASE 7+ trading entrypoint — produces ``list[Signal]`` from presets."""
+    global _strategy_engine  # noqa: PLW0603
+    if _strategy_engine is None:
+        _strategy_engine = StrategyEngine(market=get_market_service())
+    return _strategy_engine
+
+
+def get_signal_repository() -> SignalRepository:
+    """FASE 7+ persistence boundary for the ``signals`` table."""
+    global _signal_repo  # noqa: PLW0603
+    if _signal_repo is None:
+        _signal_repo = SignalRepository(async_session_factory)
+    return _signal_repo
 
 
 async def shutdown_sources() -> None:

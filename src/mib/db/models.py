@@ -17,6 +17,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     LargeBinary,
     String,
@@ -152,6 +153,63 @@ class SourceCall(Base):
     success: Mapped[bool] = mapped_column(Boolean, nullable=False, index=True)
     cached: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+# ─── Trading signals (FASE 7) ─────────────────────────────────────────
+class SignalRow(Base):
+    """Persisted strategy thesis + lifecycle state.
+
+    Mapped 1-to-1 with :class:`mib.trading.signals.Signal` plus the
+    extra row-level fields (``id``, ``status``, ``status_updated_at``).
+    The dataclass is the in-memory thesis; this is its DB row.
+
+    Schema design notes:
+
+    - Composite index on ``(strategy_id, generated_at)``. The hot
+      backtest query in FASE 12 is "all signals from
+      ``scanner.<preset>.<version>`` between dates X–Y", which would
+      otherwise full-scan once we cross a few thousand rows.
+    - ``indicators_json`` is :class:`sqlalchemy.JSON`, not Text. SQLite
+      ≥ 3.38 exposes the ``->`` / ``->>`` operators, so backtest
+      analysis can ``WHERE indicators_json->>'rsi_14' < 25`` without a
+      Python parse step on every row.
+    - Side and status sets are policed with check constraints so the
+      DB rejects typos that the application layer might let slip.
+    """
+
+    __tablename__ = "signals"
+    __table_args__ = (
+        Index("ix_signals_strategy_generated", "strategy_id", "generated_at"),
+        CheckConstraint(
+            "side IN ('long', 'short', 'flat')", name="ck_signals_side"
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'expired', 'consumed', 'cancelled')",
+            name="ck_signals_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    ticker: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    strength: Mapped[float] = mapped_column(Float, nullable=False)
+    timeframe: Mapped[str] = mapped_column(String(8), nullable=False)
+    entry_low: Mapped[float] = mapped_column(Float, nullable=False)
+    entry_high: Mapped[float] = mapped_column(Float, nullable=False)
+    invalidation: Mapped[float] = mapped_column(Float, nullable=False)
+    target_1: Mapped[float] = mapped_column(Float, nullable=False)
+    target_2: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)
+    indicators_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    generated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    strategy_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    confidence_ai: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", index=True
+    )
+    status_updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 # ─── Processed news (dedup) ───────────────────────────────────────────
