@@ -58,6 +58,43 @@ async def test_add_returns_persisted_signal_with_pending_status(
 
 
 @pytest.mark.asyncio
+async def test_add_computes_default_expires_at_from_timeframe(
+    repo: SignalRepository, fresh_db: None  # noqa: ARG001
+) -> None:
+    """1h timeframe + default ttl_bars=4 → expires_at = generated_at + 4h.
+
+    SQLite stores DateTime as naive (no tzinfo); compare wall-clock values.
+    """
+    base = datetime(2026, 4, 27, 12, 0, tzinfo=UTC)
+    persisted = await repo.add(_signal(generated_at=base))
+    from mib.db.models import SignalRow  # noqa: PLC0415
+    from mib.db.session import async_session_factory  # noqa: PLC0415
+
+    async with async_session_factory() as session:
+        row = await session.get(SignalRow, persisted.id)
+        assert row is not None
+        expected_naive = (base + timedelta(hours=4)).replace(tzinfo=None)
+        assert row.expires_at == expected_naive
+
+
+@pytest.mark.asyncio
+async def test_add_with_ttl_bars_override(
+    repo: SignalRepository, fresh_db: None  # noqa: ARG001
+) -> None:
+    base = datetime(2026, 4, 27, 12, 0, tzinfo=UTC)
+    persisted = await repo.add(_signal(generated_at=base), ttl_bars=8)
+    from mib.db.models import SignalRow  # noqa: PLC0415
+    from mib.db.session import async_session_factory  # noqa: PLC0415
+
+    async with async_session_factory() as session:
+        row = await session.get(SignalRow, persisted.id)
+        assert row is not None
+        # 1h × 8 bars = 8h
+        expected_naive = (base + timedelta(hours=8)).replace(tzinfo=None)
+        assert row.expires_at == expected_naive
+
+
+@pytest.mark.asyncio
 async def test_get_roundtrips_full_signal(
     repo: SignalRepository, fresh_db: None  # noqa: ARG001
 ) -> None:
@@ -79,33 +116,6 @@ async def test_get_unknown_id_returns_none(
 
 
 @pytest.mark.asyncio
-async def test_mark_status_transitions_and_bumps_timestamp(
-    repo: SignalRepository, fresh_db: None  # noqa: ARG001
-) -> None:
-    saved = await repo.add(_signal())
-    updated = await repo.mark_status(saved.id, "consumed")
-    assert updated is not None
-    assert updated.status == "consumed"
-    assert updated.status_updated_at >= saved.status_updated_at
-
-
-@pytest.mark.asyncio
-async def test_mark_status_unknown_id_returns_none(
-    repo: SignalRepository, fresh_db: None  # noqa: ARG001
-) -> None:
-    assert await repo.mark_status(404, "consumed") is None
-
-
-@pytest.mark.asyncio
-async def test_mark_status_rejects_unknown_status(
-    repo: SignalRepository, fresh_db: None  # noqa: ARG001
-) -> None:
-    saved = await repo.add(_signal())
-    with pytest.raises(ValueError, match="invalid SignalStatus"):
-        await repo.mark_status(saved.id, "approved")  # type: ignore[arg-type]
-
-
-@pytest.mark.asyncio
 async def test_list_pending_returns_only_pending_desc_by_time(
     repo: SignalRepository, fresh_db: None  # noqa: ARG001
 ) -> None:
@@ -113,8 +123,10 @@ async def test_list_pending_returns_only_pending_desc_by_time(
     a = await repo.add(_signal(generated_at=base))
     b = await repo.add(_signal(generated_at=base + timedelta(minutes=5)))
     c = await repo.add(_signal(generated_at=base + timedelta(minutes=10)))
-    # Knock one out of the pending pool.
-    await repo.mark_status(a.id, "cancelled")
+    # Knock one out of the pending pool via the append-only transition API.
+    await repo.transition(
+        a.id, "cancelled", actor="user:test", event_type="cancelled"
+    )
 
     pending = await repo.list_pending()
     ids = [p.id for p in pending]

@@ -121,7 +121,7 @@ strict = true
 # StrategyEngine) goes strict; the SQLAlchemy repo and the StrEnum
 # module are intentionally left at default to avoid fighting
 # Mapped[T] inference and Enum subclassing edge cases.
-module = ["mib.trading.signals", "mib.trading.strategy"]
+module = ["mib.trading.signals", "mib.trading.strategy", "mib.trading.expiration"]
 strict = true
 
 # ─────────────────────────────────────────────────────────────────

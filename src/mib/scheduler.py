@@ -73,12 +73,28 @@ def start_scheduler() -> None:
         replace_existing=True,
         next_run_time=None,  # we kick it manually below to seed the cache fast
     )
+
+    # FASE 8.1 — TTL expiration of pending signals every 15 min.
+    # IntervalTrigger (NOT cron) because the cadence is not anchored
+    # to candle close; the job just sweeps DB state.
+    from mib.trading.expiration import expire_stale_signals_job  # noqa: PLC0415
+
+    sched.add_job(
+        expire_stale_signals_job,
+        trigger=IntervalTrigger(minutes=15),
+        id="expire_stale_signals",
+        name="Expire pending signals past TTL",
+        replace_existing=True,
+    )
+
     sched.start()
     # Fire once ASAP to populate the cache; fire-and-forget.
     import asyncio
 
     asyncio.create_task(_probe_sources_job())
-    logger.info("scheduler: started with health probe job (5-min interval)")
+    logger.info(
+        "scheduler: started with health probe (5min) + expire_stale_signals (15min)"
+    )
 
 
 def register_bot_jobs() -> None:

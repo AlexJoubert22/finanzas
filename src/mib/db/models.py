@@ -210,6 +210,49 @@ class SignalRow(Base):
         String(16), nullable=False, default="pending", index=True
     )
     status_updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # FASE 8.1: TTL — signal becomes 'expired' once expires_at < now and
+    # status is still 'pending'. Default = generated_at + 4 × timeframe_bars,
+    # computed at insert time by the repository (ttl_bars override allowed).
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, index=True
+    )
+
+
+class SignalStatusEvent(Base):
+    """Append-only event log for transitions of :class:`SignalRow.status`.
+
+    Per ``ROADMAP.md`` Parte 0 append-only mandate: the mutable
+    ``signals.status`` column is a denormalised cache of the latest
+    event. Every transition writes a row here in the SAME transaction
+    that updates the cache.
+
+    The application-level helper :meth:`SignalRepository.transition`
+    is the only allowed mutation path. Direct ``UPDATE`` on
+    ``signals.status`` is forbidden by convention.
+    """
+
+    __tablename__ = "signal_status_events"
+    __table_args__ = (
+        Index("ix_signal_status_events_signal_id", "signal_id"),
+        Index("ix_signal_status_events_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    signal_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("signals.id"), nullable=False
+    )
+    # NULL on the "created" event (no prior state).
+    from_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    to_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    # One of: created | approved | cancelled | expired | consumed | reconciled
+    event_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    # user:<telegram_id> | job:<job_name> | system
+    actor: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
 
 
 # ─── Processed news (dedup) ───────────────────────────────────────────

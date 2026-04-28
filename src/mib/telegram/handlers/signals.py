@@ -34,6 +34,7 @@ from mib.telegram.formatters import (
     fmt_signal_card,
 )
 from mib.trading.notify import scanner_to_signals_job
+from mib.trading.signal_repo import StaleSignalStateError
 
 _VALID_PRESETS = {"oversold", "breakout", "trending"}
 
@@ -142,12 +143,34 @@ async def on_signal_callback(
         await _send_chart(update, signal_id)
 
 
+def _actor_for(update: Update) -> str:
+    """Build the audit ``actor`` string from a Telegram update."""
+    user = update.effective_user
+    if user is None:
+        return "user:unknown"
+    return f"user:{user.id}"
+
+
 async def _consume_signal(update: Update, signal_id: int) -> None:
     query = update.callback_query
     if query is None:
         return
     repo = get_signal_repository()
-    updated = await repo.mark_status(signal_id, "consumed")
+    try:
+        updated = await repo.transition(
+            signal_id,
+            "consumed",
+            actor=_actor_for(update),
+            event_type="approved",
+            expected_from_status="pending",
+        )
+    except StaleSignalStateError as exc:
+        await query.edit_message_text(
+            f"⚠️ Signal #{signal_id} ya no está pendiente "
+            f"(estado actual: {esc(exc.actual)}).",
+            parse_mode="HTML",
+        )
+        return
     if updated is None:
         await query.edit_message_text(
             f"⚠️ Signal #{signal_id} no encontrada.", parse_mode="HTML"
@@ -165,7 +188,21 @@ async def _cancel_signal(update: Update, signal_id: int) -> None:
     if query is None:
         return
     repo = get_signal_repository()
-    updated = await repo.mark_status(signal_id, "cancelled")
+    try:
+        updated = await repo.transition(
+            signal_id,
+            "cancelled",
+            actor=_actor_for(update),
+            event_type="cancelled",
+            expected_from_status="pending",
+        )
+    except StaleSignalStateError as exc:
+        await query.edit_message_text(
+            f"⚠️ Signal #{signal_id} ya no está pendiente "
+            f"(estado actual: {esc(exc.actual)}).",
+            parse_mode="HTML",
+        )
+        return
     if updated is None:
         await query.edit_message_text(
             f"⚠️ Signal #{signal_id} no encontrada.", parse_mode="HTML"
