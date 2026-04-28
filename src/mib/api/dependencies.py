@@ -20,12 +20,14 @@ from mib.services.news import NewsService
 from mib.services.scanner import ScannerService
 from mib.sources.alphavantage import AlphaVantageSource
 from mib.sources.ccxt_reader import CCXTReader
+from mib.sources.ccxt_trader import CCXTTrader
 from mib.sources.coingecko import CoinGeckoSource
 from mib.sources.finnhub import FinnhubSource
 from mib.sources.fred import FREDSource
 from mib.sources.rss import RSSSource
 from mib.sources.tradingview_ta import TradingViewTASource
 from mib.sources.yfinance_source import YFinanceSource
+from mib.trading.portfolio import PortfolioState
 from mib.trading.signal_repo import SignalRepository
 from mib.trading.strategy import StrategyEngine
 
@@ -47,6 +49,8 @@ _ai_service: AIService | None = None
 _scanner: ScannerService | None = None
 _strategy_engine: StrategyEngine | None = None
 _signal_repo: SignalRepository | None = None
+_ccxt_trader: CCXTTrader | None = None
+_portfolio_state: PortfolioState | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -182,7 +186,30 @@ def get_signal_repository() -> SignalRepository:
     return _signal_repo
 
 
+def get_ccxt_trader() -> CCXTTrader:
+    """FASE 8+ executor singleton.
+
+    Returns the dry-run skeleton until FASE 9 wires real credentials.
+    Double seatbelt (``trading_enabled`` + per-instance ``dry_run``)
+    keeps writes locally short-circuited until then.
+    """
+    global _ccxt_trader  # noqa: PLW0603
+    if _ccxt_trader is None:
+        _ccxt_trader = CCXTTrader(exchange_id="binance")
+    return _ccxt_trader
+
+
+def get_portfolio_state() -> PortfolioState:
+    """FASE 8.2+ portfolio cache, refreshed by `portfolio_sync_job`."""
+    global _portfolio_state  # noqa: PLW0603
+    if _portfolio_state is None:
+        _portfolio_state = PortfolioState(trader=get_ccxt_trader())
+    return _portfolio_state
+
+
 async def shutdown_sources() -> None:
     """Close long-lived connections (called from FastAPI lifespan)."""
     if _ccxt is not None:
         await _ccxt.close()
+    if _ccxt_trader is not None:
+        await _ccxt_trader.close()

@@ -302,6 +302,21 @@ def fmt_status(payload: dict[str, Any]) -> str:
         for provider, frac in quotas.items():
             pct = f"{float(frac) * 100:.1f}%"
             lines.append(f"  {esc(provider)}: {pct}")
+
+    portfolio = payload.get("portfolio")
+    if portfolio:
+        lines.append("")
+        lines.append("<b>Portfolio</b>")
+        equity = portfolio.get("equity_quote")
+        if equity is not None:
+            lines.append(f"  Equity: <code>{esc(equity)} EUR</code>")
+        lines.append(f"  Posiciones abiertas: {portfolio.get('open_positions', 0)}")
+        age = portfolio.get("last_synced_age_seconds")
+        if age is not None:
+            lines.append(f"  Último sync: hace {int(age)}s")
+        source = portfolio.get("source")
+        if source:
+            lines.append(f"  Fuente: <i>{esc(source)}</i>")
     return "\n".join(lines)
 
 

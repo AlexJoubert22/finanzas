@@ -87,13 +87,27 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
 
+    # FASE 8.2 — Portfolio cache sync from exchange every 30s.
+    # IntervalTrigger because the cadence is independent of market data.
+    from mib.trading.jobs.portfolio_sync import portfolio_sync_job  # noqa: PLC0415
+
+    sched.add_job(
+        portfolio_sync_job,
+        trigger=IntervalTrigger(seconds=30),
+        id="portfolio_sync",
+        name="Refresh PortfolioState from exchange",
+        replace_existing=True,
+    )
+
     sched.start()
     # Fire once ASAP to populate the cache; fire-and-forget.
     import asyncio
 
     asyncio.create_task(_probe_sources_job())
+    asyncio.create_task(portfolio_sync_job())
     logger.info(
-        "scheduler: started with health probe (5min) + expire_stale_signals (15min)"
+        "scheduler: started with health probe (5min) + expire_stale_signals (15min) "
+        "+ portfolio_sync (30s)"
     )
 
 
