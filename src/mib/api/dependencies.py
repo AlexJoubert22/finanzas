@@ -29,6 +29,12 @@ from mib.sources.rss import RSSSource
 from mib.sources.tradingview_ta import TradingViewTASource
 from mib.sources.yfinance_source import YFinanceSource
 from mib.trading.portfolio import PortfolioState
+from mib.trading.risk.gates.daily_drawdown import DailyDrawdownGate
+from mib.trading.risk.gates.kill_switch import KillSwitchGate
+from mib.trading.risk.manager import RiskManager
+from mib.trading.risk.protocol import Gate
+from mib.trading.risk.repo import RiskDecisionRepository
+from mib.trading.risk.state import TradingStateService
 from mib.trading.signal_repo import SignalRepository
 from mib.trading.strategy import StrategyEngine
 
@@ -52,6 +58,9 @@ _strategy_engine: StrategyEngine | None = None
 _signal_repo: SignalRepository | None = None
 _ccxt_trader: CCXTTrader | None = None
 _portfolio_state: PortfolioState | None = None
+_trading_state_service: TradingStateService | None = None
+_risk_decision_repo: RiskDecisionRepository | None = None
+_risk_manager: RiskManager | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -207,6 +216,38 @@ def get_portfolio_state() -> PortfolioState:
     if _portfolio_state is None:
         _portfolio_state = PortfolioState(trader=get_ccxt_trader())
     return _portfolio_state
+
+
+def get_trading_state_service() -> TradingStateService:
+    """FASE 8.3+ singleton ``trading_state`` row reader/updater."""
+    global _trading_state_service  # noqa: PLW0603
+    if _trading_state_service is None:
+        _trading_state_service = TradingStateService(async_session_factory)
+    return _trading_state_service
+
+
+def get_risk_decision_repository() -> RiskDecisionRepository:
+    """FASE 8.3+ append-only repository for ``risk_decisions``."""
+    global _risk_decision_repo  # noqa: PLW0603
+    if _risk_decision_repo is None:
+        _risk_decision_repo = RiskDecisionRepository(async_session_factory)
+    return _risk_decision_repo
+
+
+def get_risk_manager() -> RiskManager:
+    """FASE 8.3+ orchestrator. Gates registered in priority order
+    (cheapest reject first). Future sub-commits append more gates
+    behind the kill switch + DD pair.
+    """
+    global _risk_manager  # noqa: PLW0603
+    if _risk_manager is None:
+        state = get_trading_state_service()
+        gates: list[Gate] = [
+            KillSwitchGate(state),
+            DailyDrawdownGate(state, async_session_factory),
+        ]
+        _risk_manager = RiskManager(gates=gates)
+    return _risk_manager
 
 
 async def shutdown_sources() -> None:

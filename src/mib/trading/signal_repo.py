@@ -25,7 +25,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from mib.db.models import SignalRow, SignalStatusEvent
@@ -192,9 +192,19 @@ class SignalRepository:
             )
 
         async with self._sf() as session:
-            async with session.begin():
+            # SQLite race protection: ``BEGIN IMMEDIATE`` acquires the
+            # write lock at transaction start rather than at first
+            # write. Without this, two concurrent transitions on the
+            # same signal can both pass the ``expected_from_status``
+            # check before either commits, defeating the race-safety
+            # contract. With IMMEDIATE, the second caller blocks until
+            # the first commits, then sees the updated status and
+            # raises StaleSignalStateError.
+            await session.execute(text("BEGIN IMMEDIATE"))
+            try:
                 row = await session.get(SignalRow, signal_id)
                 if row is None:
+                    await session.rollback()
                     return None
 
                 current = row.status
@@ -202,6 +212,7 @@ class SignalRepository:
                     expected_from_status is not None
                     and current != expected_from_status
                 ):
+                    await session.rollback()
                     raise StaleSignalStateError(
                         signal_id, expected_from_status, current
                     )
@@ -220,6 +231,14 @@ class SignalRepository:
 
                 row.status = to_status
                 row.status_updated_at = now
+
+                await session.commit()
+            except StaleSignalStateError:
+                raise
+            except Exception:
+                await session.rollback()
+                raise
+
             await session.refresh(row)
             logger.debug(
                 "signal_repo: transitioned id={} {}->{} actor={} event={}",
