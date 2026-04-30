@@ -64,6 +64,16 @@ class Settings(BaseSettings):
     nvidia_daily_limit: int = 10000
     nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
 
+    # ─── Binance Testnet (sandbox, FASE 9.1) ────────────────────────
+    # Separate from any real-account credentials. Withdrawals MUST
+    # stay disabled on this key (sandbox doesn't have real funds, but
+    # the same hygiene applies on day one). The base_url MUST contain
+    # "testnet" or "sandbox" — the third seatbelt in CCXTTrader
+    # rejects any writes whose target URL doesn't match this pattern.
+    binance_sandbox_api_key: str = ""
+    binance_sandbox_secret: str = ""
+    binance_sandbox_base_url: str = "https://testnet.binance.vision"
+
     # ─── Data source keys ───────────────────────────────────────────
     alpha_vantage_api_key: str = ""
     finnhub_api_key: str = ""

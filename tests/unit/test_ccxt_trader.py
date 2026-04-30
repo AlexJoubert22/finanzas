@@ -20,9 +20,15 @@ from mib.config import get_settings
 from mib.sources.ccxt_trader import CCXTTrader
 
 
-def test_trader_is_unavailable_until_phase_9() -> None:
+@pytest.mark.asyncio
+async def test_trader_unavailable_without_credentials() -> None:
+    """Without API key/secret, ``is_available()`` returns False without
+    attempting any network call. Refactored from FASE 8.0 contract:
+    the method is now async (FASE 9.1) and does a real ping when
+    credentials are present — see ``test_ccxt_trader_sandbox.py``.
+    """
     t = CCXTTrader()
-    assert t.is_available() is False
+    assert await t.is_available() is False
 
 
 @pytest.mark.asyncio

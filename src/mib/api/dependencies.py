@@ -13,6 +13,7 @@ from mib.ai.providers.groq_provider import GroqProvider
 from mib.ai.providers.nvidia_provider import NvidiaProvider
 from mib.ai.providers.openrouter_provider import OpenRouterProvider
 from mib.ai.router import AIRouter
+from mib.config import get_settings
 from mib.db.session import async_session_factory
 from mib.services.ai_service import AIService
 from mib.services.macro import MacroService
@@ -204,15 +205,24 @@ def get_signal_repository() -> SignalRepository:
 
 
 def get_ccxt_trader() -> CCXTTrader:
-    """FASE 8+ executor singleton.
+    """FASE 9.1+ executor singleton, wired to Binance Testnet.
 
-    Returns the dry-run skeleton until FASE 9 wires real credentials.
-    Double seatbelt (``trading_enabled`` + per-instance ``dry_run``)
-    keeps writes locally short-circuited until then.
+    Reads sandbox credentials from settings. ``dry_run`` defaults to
+    ``not trading_enabled`` so writes stay gated until the operator
+    explicitly flips the master switch (FASE 14). The triple seatbelt
+    inside ``CCXTTrader`` adds a third ``is_sandbox`` check that hard-
+    blocks any production endpoint until that day.
     """
     global _ccxt_trader  # noqa: PLW0603
     if _ccxt_trader is None:
-        _ccxt_trader = CCXTTrader(exchange_id="binance")
+        s = get_settings()
+        _ccxt_trader = CCXTTrader(
+            exchange_id="binance",
+            api_key=s.binance_sandbox_api_key,
+            api_secret=s.binance_sandbox_secret,
+            base_url=s.binance_sandbox_base_url,
+            dry_run=not s.trading_enabled,
+        )
     return _ccxt_trader
 
 
