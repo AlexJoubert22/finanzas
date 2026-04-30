@@ -9,19 +9,77 @@ The handlers also handle the race where the signal is no longer
 ``pending`` (e.g. expired by the TTL job between message dispatch
 and the user clicking) — they must NOT write a transition event in
 that case, instead show a clear "no longer pending" message.
+
+FASE 8.6 added a re-evaluation step before the consume transition.
+We mock the risk dependencies so this test stays focused on the
+callback's transition contract; the risk-wiring path is exercised
+in :mod:`tests.unit.test_signal_notify` and the integration test.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from mib.api.dependencies import get_signal_repository
+from mib.models.portfolio import PortfolioSnapshot
+from mib.telegram.handlers import signals as handlers_mod
 from mib.telegram.handlers.signals import _cancel_signal, _consume_signal
-from mib.trading.signals import Signal
+from mib.trading.risk.decision import RiskDecision
+from mib.trading.signals import PersistedSignal, Signal
+
+
+@pytest.fixture(autouse=True)
+def _mock_risk_in_handlers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Patch the risk dependencies used by the consume callback.
+
+    Returns a fresh approved RiskDecision on demand so the callback's
+    re-evaluation path proceeds without needing trading_state seeded
+    or a real portfolio snapshot.
+    """
+
+    class _FakePortfolio:
+        async def snapshot(self) -> PortfolioSnapshot:
+            return PortfolioSnapshot(
+                balances=[],
+                positions=[],
+                equity_quote=Decimal(0),
+                last_synced_at=datetime.now(UTC),
+                source="dry-run",
+            )
+
+    class _FakeRiskManager:
+        async def evaluate(
+            self, persisted: PersistedSignal, portfolio: Any, *, version: int = 1  # noqa: ARG002
+        ) -> RiskDecision:
+            return RiskDecision(
+                signal_id=persisted.id,
+                version=version,
+                approved=True,
+                gate_results=(),
+                reasoning="approved by fake",
+                decided_at=datetime.now(UTC),
+                sized_amount=Decimal("100"),
+            )
+
+    class _FakeDecisionRepo:
+        async def latest_for_signal(self, _id: int) -> RiskDecision | None:
+            return None  # force re-evaluation each call
+
+        async def append_with_retry(
+            self, _id: int, factory: Any, *, max_retries: int = 3  # noqa: ARG002
+        ) -> RiskDecision:
+            return factory(1)
+
+    monkeypatch.setattr(handlers_mod, "get_portfolio_state", lambda: _FakePortfolio())
+    monkeypatch.setattr(handlers_mod, "get_risk_manager", lambda: _FakeRiskManager())
+    monkeypatch.setattr(
+        handlers_mod, "get_risk_decision_repository", lambda: _FakeDecisionRepo()
+    )
 
 
 def _signal() -> Signal:
