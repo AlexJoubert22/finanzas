@@ -36,6 +36,7 @@ from mib.trading.mode_service import ModeService
 from mib.trading.news_reactor import NewsReactor
 from mib.trading.order_repo import OrderRepository
 from mib.trading.portfolio import PortfolioState
+from mib.trading.postmortem import DailyPostmortemRunner
 from mib.trading.reconcile import Reconciler
 from mib.trading.risk.correlation_groups import CorrelationGroups
 from mib.trading.risk.gates.correlation_group import CorrelationGroupGate
@@ -83,6 +84,7 @@ _reconciler: Reconciler | None = None
 _executor: OrderExecutor | None = None
 _mode_service: ModeService | None = None
 _news_reactor: NewsReactor | None = None
+_postmortem_runner: DailyPostmortemRunner | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -332,6 +334,17 @@ def get_reconciler() -> Reconciler:
             session_factory=async_session_factory,
         )
     return _reconciler
+
+
+def get_postmortem_runner() -> DailyPostmortemRunner:
+    """FASE 11.4+ daily postmortem batch runner."""
+    global _postmortem_runner  # noqa: PLW0603
+    if _postmortem_runner is None:
+        _postmortem_runner = DailyPostmortemRunner(
+            ai_router=get_ai_router(),
+            session_factory=async_session_factory,
+        )
+    return _postmortem_runner
 
 
 def get_news_reactor() -> NewsReactor:

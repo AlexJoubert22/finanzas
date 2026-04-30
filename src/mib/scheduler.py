@@ -9,6 +9,7 @@ spawn duplicate jobs if app factory is called twice in tests.
 from __future__ import annotations
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from mib.api.dependencies import (
@@ -119,6 +120,17 @@ def start_scheduler() -> None:
         trigger=IntervalTrigger(minutes=5),
         id="news_reactor",
         name="News reactor (proposals only)",
+        replace_existing=True,
+    )
+
+    # FASE 11.4 — Daily postmortem batch at 02:00 UTC.
+    from mib.trading.jobs.postmortem_job import postmortem_job  # noqa: PLC0415
+
+    sched.add_job(
+        postmortem_job,
+        trigger=CronTrigger(hour=2, minute=0, timezone="UTC"),
+        id="daily_postmortem",
+        name="Daily postmortem batch (02:00 UTC)",
         replace_existing=True,
     )
 

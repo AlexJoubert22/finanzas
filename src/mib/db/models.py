@@ -607,6 +607,53 @@ class NewsReactionRow(Base):
     decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
+# ─── Daily postmortems (append-only, FASE 11.4) ──────────────────────
+class DailyPostmortemRow(Base):
+    """One row per UTC day's postmortem batch.
+
+    Born append-only: the nightly job inserts one row per ``date_utc``,
+    ``UNIQUE(date_utc)`` keeps re-runs idempotent. Old rows are never
+    edited; if the analysis needs to be re-issued we'd add a ``v``
+    suffix to ``date_utc`` (FASE 13+ if it ever happens).
+
+    ``trades_analyzed=0`` is preserved as a heartbeat: even a quiet
+    day produces a row so the operator can see the postmortem ran.
+    """
+
+    __tablename__ = "daily_postmortems"
+    __table_args__ = (
+        UniqueConstraint("date_utc", name="uq_daily_postmortems_date_utc"),
+        Index("ix_daily_postmortems_date_utc", "date_utc"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date_utc: Mapped[str] = mapped_column(String(10), nullable=False)
+    """ISO date ``YYYY-MM-DD`` of the closing day in UTC."""
+    trades_analyzed: Mapped[int] = mapped_column(Integer, nullable=False)
+    aggregate_pnl_quote: Mapped[Decimal] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=False, default=Decimal(0)
+    )
+    patterns_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    outliers_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    suggestions_json: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    regime_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_provider_used: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
+    ai_model_used: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+
 # ─── Reconciliation (FASE 9.5) ────────────────────────────────────────
 class PortfolioSnapshotRow(Base):
     """Persisted snapshot of :class:`PortfolioSnapshot` for diagnostics.
