@@ -81,17 +81,50 @@ async def test_passes_when_no_equity(fresh_db: None) -> None:  # noqa: ARG001
     assert "no equity" in result.reason
 
 
+async def _seed_closed_trade(realized_pnl: float) -> None:
+    """Insert a minimal closed-trade row.
+
+    Uses raw SQL to avoid pulling in the full repo machinery for these
+    gate-focused tests. After FASE 9.4 the ``trades`` table has NOT
+    NULL constraints on signal_id/ticker/side/size/etc., so we also
+    seed a parent ``signals`` row to satisfy the FK.
+    """
+    async with async_session_factory() as session:
+        async with session.begin():
+            await session.execute(
+                text(
+                    "INSERT INTO signals "
+                    "(ticker, side, strength, timeframe, "
+                    " entry_low, entry_high, invalidation, "
+                    " target_1, target_2, rationale, indicators_json, "
+                    " generated_at, strategy_id, status, status_updated_at) "
+                    "VALUES ('BTC/USDT', 'long', 0.7, '1h', 100, 101, 97, "
+                    "103, 109, 'seed', '{}', CURRENT_TIMESTAMP, "
+                    "'scanner.oversold.v1', 'pending', CURRENT_TIMESTAMP)"
+                )
+            )
+            sid_row = await session.execute(text("SELECT last_insert_rowid()"))
+            sid = sid_row.scalar_one()
+            await session.execute(
+                text(
+                    "INSERT INTO trades "
+                    "(signal_id, ticker, side, size, entry_price, "
+                    " stop_loss_price, opened_at, closed_at, status, "
+                    " realized_pnl_quote, fees_paid_quote, exchange_id) "
+                    "VALUES (:sid, 'BTC/USDT', 'long', 0.001, 60000, "
+                    " 58800, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'closed', "
+                    f" {realized_pnl}, 0, 'binance_sandbox')"
+                ),
+                {"sid": sid},
+            )
+
+
 @pytest.mark.asyncio
-async def test_passes_when_trades_table_missing(
+async def test_passes_when_no_trades_today(
     fresh_db: None,  # noqa: ARG001
 ) -> None:
-    """FASE 8.3 contract: trades table doesn't exist yet — robust path
-    returns 0 PnL and lets the gate pass.
-    """
+    """Empty ``trades`` table → 0 realised PnL → gate passes."""
     await _seed()
-    # The fresh_db fixture creates only Base.metadata tables; `trades`
-    # is not in the metadata until FASE 9, so the query below raises
-    # OperationalError which DailyDrawdownGate must swallow.
     result = await _gate().check(_signal(), _portfolio(), get_settings())
     assert result.passed is True
     assert "within threshold" in result.reason
@@ -103,24 +136,7 @@ async def test_passes_when_today_pnl_within_threshold(
 ) -> None:
     """Realistic PnL > -3% × equity → passes."""
     await _seed()
-    # Simulate the trades table existing with a small loss.
-    async with async_session_factory() as session:
-        async with session.begin():
-            await session.execute(
-                text(
-                    "CREATE TABLE IF NOT EXISTS trades ("
-                    " id INTEGER PRIMARY KEY, "
-                    " realized_pnl_quote NUMERIC, "
-                    " closed_at DATETIME"
-                    ")"
-                )
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO trades (realized_pnl_quote, closed_at) "
-                    "VALUES (-10.0, CURRENT_TIMESTAMP)"
-                )
-            )
+    await _seed_closed_trade(-10.0)
     result = await _gate().check(_signal(), _portfolio(), get_settings())
     # 1000 EUR equity * 0.03 = 30 threshold; today_pnl=-10 > -30.
     assert result.passed is True
@@ -132,23 +148,7 @@ async def test_kills_until_midnight_when_dd_breached(
 ) -> None:
     """today_pnl below -3% × equity → kill window flips, signal rejected."""
     await _seed()
-    async with async_session_factory() as session:
-        async with session.begin():
-            await session.execute(
-                text(
-                    "CREATE TABLE IF NOT EXISTS trades ("
-                    " id INTEGER PRIMARY KEY, "
-                    " realized_pnl_quote NUMERIC, "
-                    " closed_at DATETIME"
-                    ")"
-                )
-            )
-            await session.execute(
-                text(
-                    "INSERT INTO trades (realized_pnl_quote, closed_at) "
-                    "VALUES (-100.0, CURRENT_TIMESTAMP)"
-                )
-            )
+    await _seed_closed_trade(-100.0)
     gate = _gate()
     result = await gate.check(_signal(), _portfolio(), get_settings())
     # 1000 * 0.03 = 30; today_pnl = -100 < -30 → reject.

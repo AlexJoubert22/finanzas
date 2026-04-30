@@ -37,6 +37,7 @@ from mib.telegram.handlers.emergency import (
 from mib.telegram.handlers.macro import macro as macro_handler
 from mib.telegram.handlers.news import news as news_handler
 from mib.telegram.handlers.price import price as price_handler
+from mib.telegram.handlers.reconcile import reconcile_cmd
 from mib.telegram.handlers.scan import scan as scan_handler
 from mib.telegram.handlers.signals import (
     on_signal_callback,
@@ -85,6 +86,7 @@ def build_application() -> BotApp:
     app.add_handler(CommandHandler("stop", stop_cmd), group=-1)
     app.add_handler(CommandHandler("freeze", freeze_cmd), group=-1)
     app.add_handler(CommandHandler("risk", risk_cmd), group=-1)
+    app.add_handler(CommandHandler("reconcile", reconcile_cmd), group=-1)
 
     # Commands
     app.add_handler(CommandHandler("start", start_handler))

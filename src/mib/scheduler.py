@@ -99,6 +99,17 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
 
+    # FASE 9.5 — Reconciler: diff exchange ↔ DB every 5 min.
+    from mib.trading.jobs.reconcile_job import reconcile_job  # noqa: PLC0415
+
+    sched.add_job(
+        reconcile_job,
+        trigger=IntervalTrigger(minutes=5),
+        id="reconcile",
+        name="Reconcile exchange state vs DB",
+        replace_existing=True,
+    )
+
     sched.start()
     # Fire once ASAP to populate the cache; fire-and-forget.
     import asyncio
@@ -107,7 +118,7 @@ def start_scheduler() -> None:
     asyncio.create_task(portfolio_sync_job())
     logger.info(
         "scheduler: started with health probe (5min) + expire_stale_signals (15min) "
-        "+ portfolio_sync (30s)"
+        "+ portfolio_sync (30s) + reconcile (5min)"
     )
 
 
