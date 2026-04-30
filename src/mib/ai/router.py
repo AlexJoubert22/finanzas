@@ -76,10 +76,23 @@ FALLBACK_CHAINS: dict[TaskType, list[ChainStep]] = {
         ChainStep(ProviderId.NVIDIA, NVIDIA_SUMMARY),
         ChainStep(ProviderId.OPENROUTER, OPENROUTER_SUMMARY),
     ],
-    # FASE 11 placeholders — left empty on purpose so the router returns a
-    # clear "not yet wired" failure instead of falling through to a default.
-    TaskType.TRADE_VALIDATE: [],
-    TaskType.TRADE_POSTMORTEM: [],
+    # FASE 11 — Trading IA loop wiring.
+    # TRADE_VALIDATE inherits the REASONING chain (DeepSeek R1 first, then
+    # OpenRouter / Gemini / Groq). DeepSeek R1's chain-of-thought lands
+    # well on "should we approve this signal" reasoning; Nemotron 49B is
+    # tighter for postmortem's pattern-mining shape.
+    TaskType.TRADE_VALIDATE: [
+        ChainStep(ProviderId.NVIDIA, NVIDIA_REASONING),
+        ChainStep(ProviderId.OPENROUTER, OPENROUTER_REASONING),
+        ChainStep(ProviderId.GEMINI, GEMINI_FLASH),
+        ChainStep(ProviderId.GROQ, GROQ_70B),
+    ],
+    TaskType.TRADE_POSTMORTEM: [
+        ChainStep(ProviderId.NVIDIA, NVIDIA_ANALYSIS),
+        ChainStep(ProviderId.GROQ, GROQ_70B),
+        ChainStep(ProviderId.OPENROUTER, OPENROUTER_ANALYSIS),
+        ChainStep(ProviderId.GEMINI, GEMINI_FLASH),
+    ],
 }
 
 
