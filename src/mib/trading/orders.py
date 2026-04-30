@@ -83,6 +83,10 @@ class OrderResult:
     order_id: int
     """Primary key of the row in the ``orders`` table."""
 
+    signal_id: int
+    """FK to ``signals.id``. Lets downstream consumers (stop placer,
+    executor) chain order → signal without an extra DB round-trip."""
+
     client_order_id: str
     """Idempotency key sent to the exchange. Deterministic per
     (signal_id, side, type, amount, price)."""

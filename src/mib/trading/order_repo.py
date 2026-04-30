@@ -317,6 +317,7 @@ def _row_to_result(row: OrderRow) -> OrderResult:
     amount = Decimal(str(row.amount))
     return OrderResult(
         order_id=row.id,
+        signal_id=row.signal_id,
         client_order_id=row.client_order_id,
         exchange_order_id=row.exchange_order_id,
         status=status,
@@ -345,4 +346,4 @@ def _coerce_type(raw: str) -> OrderType:
 def _coerce_status(raw: str) -> OrderStatus:
     if raw not in ORDER_STATUSES:
         raise ValueError(f"unexpected order status in DB: {raw!r}")
-    return raw  # type: ignore[return-value]
+    return raw
