@@ -1,9 +1,24 @@
 """Native stop placement after entry fill.
 
 FASE 9.3 critical-safety component: once the entry order has filled,
-a stop_market order with ``reduceOnly=True`` is placed at
+a stop order with ``reduceOnly=True`` is placed at
 ``signal.invalidation`` to bound downside if the bot dies before the
 trade closes naturally.
+
+Order type & fallback (FASE 9.3 + post-FASE-9 hotfix):
+
+- Primary: ``stop_market``. Cheapest semantics, fills at any price
+  once the trigger is touched.
+- Binance spot rejects ``stop_market`` for many symbols (error
+  code -2010, "Order type not supported"). When that specific
+  rejection is detected, this placer **automatically retries the
+  same attempt with ``stop_limit``**, computing a limit price
+  slightly past the trigger so the limit fills under stress:
+  - long  (sell-to-exit): ``limit = stopPrice * 0.995``
+  - short (buy-to-exit):  ``limit = stopPrice * 1.005``
+- The fallback is a per-attempt internal swap: it does NOT consume
+  a retry slot. The 3-retry exponential backoff still applies on
+  top of whichever order type ends up landing.
 
 Retry policy: 3 attempts with exponential backoff (1s, 2s, 4s).
 Transient errors (timeout, network, 5xx) trigger retry; permanent
@@ -31,7 +46,7 @@ from typing import TYPE_CHECKING
 from mib.logger import logger
 from mib.trading.alerter import TelegramAlerter
 from mib.trading.order_repo import OrderRepository
-from mib.trading.orders import OrderSide, is_terminal_status
+from mib.trading.orders import OrderResult, OrderSide, is_terminal_status
 from mib.trading.signals import Signal
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -119,18 +134,13 @@ class NativeStopPlacer:
         last_reason: str | None = None
         for attempt in range(1, self._attempts + 1):
             try:
-                result = await self._trader.create_order(
+                result = await self._place_with_fallback(
                     signal_id=entry.signal_id,
                     symbol=signal.ticker,
                     side=stop_side,
-                    type="stop_market",
                     amount=amount,
-                    price=None,
-                    reduce_only=True,
-                    extra_params={
-                        "stopPrice": str(stop_price),
-                        "_stop_attempt": attempt,
-                    },
+                    stop_price=stop_price,
+                    attempt=attempt,
                 )
             except Exception as exc:  # noqa: BLE001
                 last_reason = f"unexpected: {exc.__class__.__name__}: {exc}"
@@ -232,3 +242,104 @@ class NativeStopPlacer:
         idx = min(attempt - 1, len(self._backoffs) - 1)
         await asyncio.sleep(self._backoffs[idx])
         return True
+
+    async def _place_with_fallback(
+        self,
+        *,
+        signal_id: int,
+        symbol: str,
+        side: OrderSide,
+        amount: Decimal,
+        stop_price: Decimal,
+        attempt: int,
+    ) -> OrderResult:
+        """Place a stop. Try ``stop_market`` first; if Binance refuses
+        the type, swap to ``stop_limit`` in the same attempt slot.
+
+        The fallback does NOT consume a retry: it's an internal swap
+        that runs once per outer attempt before the caller decides
+        whether to back off and try again.
+        """
+        primary = await self._trader.create_order(
+            signal_id=signal_id,
+            symbol=symbol,
+            side=side,
+            type="stop_market",
+            amount=amount,
+            price=None,
+            reduce_only=True,
+            extra_params={
+                "stopPrice": str(stop_price),
+                "_stop_attempt": attempt,
+            },
+        )
+        if not _is_type_not_supported_rejection(primary):
+            return primary
+
+        # Type-not-supported rejection — swap to stop_limit. Limit
+        # price is offset past the trigger so the limit can fill
+        # under the stress that triggered the stop.
+        limit_price = _stop_limit_price(stop_price, side)
+        logger.info(
+            "stop_placer: stop_type_fallback signal_id={} from_type=stop_market "
+            "to_type=stop_limit limit_price={} reason={!r}",
+            signal_id,
+            limit_price,
+            primary.reason,
+        )
+        return await self._trader.create_order(
+            signal_id=signal_id,
+            symbol=symbol,
+            side=side,
+            type="stop_limit",
+            amount=amount,
+            price=limit_price,
+            reduce_only=True,
+            extra_params={
+                "stopPrice": str(stop_price),
+                "timeInForce": "GTC",
+                "_stop_attempt": attempt,
+                "_stop_type_fallback": "stop_market->stop_limit",
+            },
+        )
+
+
+# ─── Pure helpers ───────────────────────────────────────────────────
+
+
+def _is_type_not_supported_rejection(result: OrderResult) -> bool:
+    """True iff the exchange refused the order specifically because
+    it doesn't accept the order type on this market.
+
+    Conservative match: only triggers on the well-known Binance
+    signatures so unrelated 4xx (insufficient balance, invalid
+    quantity, etc.) still break the retry loop as ``permanent``.
+    """
+    if result.status != "rejected":
+        return False
+    reason = (result.reason or "").lower()
+    if not reason:
+        return False
+    # Binance: code -2010 + "Order type not supported" / "stop loss
+    # not supported for this symbol" / "stop_market is not a valid
+    # order type for the BTC/USDT market" (ccxt phrasing).
+    needles = (
+        "order type not supported",
+        "not a valid order type",
+        "not supported for this symbol",
+        "-2010",
+    )
+    return any(n in reason for n in needles)
+
+
+def _stop_limit_price(stop_price: Decimal, side: OrderSide) -> Decimal:
+    """Aggressive limit price for a stop_limit fallback.
+
+    Long-side stops are sells: limit goes 0.5% BELOW the trigger so
+    a falling market keeps filling. Short-side stops are buys: limit
+    goes 0.5% ABOVE the trigger so a rising market keeps filling.
+    """
+    # long → sell stop → limit BELOW trigger (0.995).
+    # short → buy stop  → limit ABOVE trigger (1.005).
+    offset = Decimal("0.995") if side == "sell" else Decimal("1.005")
+    return (stop_price * offset).quantize(Decimal("0.00000001"))

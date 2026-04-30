@@ -349,3 +349,148 @@ async def test_seatbelt_block_no_retry(
     assert len(trader.calls) == 1  # no retry
     # Triple-seatbelt block IS alerted (operator should know stop wasn't placed).
     assert len(alerter.recorded) == 1
+
+
+# ─── stop_market → stop_limit fallback (post-FASE-9 hotfix) ─────────
+
+
+@pytest.mark.asyncio
+async def test_fallback_to_stop_limit_when_spot_rejects_stop_market(
+    fresh_db: None,  # noqa: ARG001
+) -> None:
+    """Binance spot returns -2010 / "not a valid order type" for
+    stop_market → placer auto-swaps to stop_limit in the SAME attempt
+    slot. ``attempts`` stays at 1 because the fallback is internal.
+    """
+    sig = _signal("long")
+    _signal_id, entry_id = await _seed_signal_and_filled_entry(sig)
+
+    rejected_stop_market = replace(
+        _stop_result(order_id=300, status="rejected"),
+        reason=(
+            "binance stop_market is not a valid order type for the "
+            "BTC/USDT market"
+        ),
+    )
+    successful_stop_limit = replace(
+        _stop_result(order_id=301), type="stop_limit"
+    )
+    trader = _StubTrader([rejected_stop_market, successful_stop_limit])
+    placer = NativeStopPlacer(
+        trader=trader,  # type: ignore[arg-type]
+        order_repo=OrderRepository(async_session_factory),
+        alerter=NullAlerter(),
+    )
+    result = await placer.place_stop_after_fill(sig, entry_id)
+
+    assert result.success is True
+    assert result.stop_order_id == 301
+    # Fallback does NOT consume a retry: still attempt #1.
+    assert result.attempts == 1
+    # Two trader calls: stop_market then stop_limit, both inside attempt 1.
+    assert len(trader.calls) == 2
+    first, second = trader.calls
+    assert first["type"] == "stop_market"
+    assert first["price"] is None
+    assert first["extra_params"]["_stop_attempt"] == 1
+    assert second["type"] == "stop_limit"
+    assert second["extra_params"]["_stop_attempt"] == 1
+    assert second["extra_params"]["timeInForce"] == "GTC"
+    # long → sell stop → limit BELOW trigger (0.995 * 58800 = 58506.0).
+    assert second["price"] == Decimal("58506.00000000")
+    assert second["extra_params"]["stopPrice"] == "58800.0"
+    assert second["extra_params"]["_stop_type_fallback"] == (
+        "stop_market->stop_limit"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fallback_offset_for_short_signal(
+    fresh_db: None,  # noqa: ARG001
+) -> None:
+    """Short → buy stop → limit ABOVE trigger (1.005 * 61200 = 61506)."""
+    sig = _signal("short")
+    _signal_id, entry_id = await _seed_signal_and_filled_entry(sig)
+    rejected = replace(
+        _stop_result(order_id=400, status="rejected"),
+        reason="-2010 Order type not supported",
+    )
+    success = replace(_stop_result(order_id=401), type="stop_limit", side="buy")
+    trader = _StubTrader([rejected, success])
+    placer = NativeStopPlacer(
+        trader=trader,  # type: ignore[arg-type]
+        order_repo=OrderRepository(async_session_factory),
+        alerter=NullAlerter(),
+    )
+    result = await placer.place_stop_after_fill(sig, entry_id)
+    assert result.success is True
+    second = trader.calls[1]
+    assert second["price"] == Decimal("61506.00000000")
+    assert second["side"] == "buy"
+
+
+@pytest.mark.asyncio
+async def test_unrelated_rejection_does_not_trigger_fallback(
+    fresh_db: None,  # noqa: ARG001
+) -> None:
+    """4xx like "insufficient balance" must NOT trigger the swap —
+    that's a permanent rejection and must break the retry loop.
+    """
+    sig = _signal("long")
+    _signal_id, entry_id = await _seed_signal_and_filled_entry(sig)
+
+    rejected = replace(
+        _stop_result(order_id=500, status="rejected"),
+        reason="insufficient balance",
+    )
+    # If the placer wrongly fell back, this would be consumed; we
+    # leave the queue with only the rejection, so a fallback would
+    # raise "no more stub results" — defensive bait.
+    trader = _StubTrader([rejected])
+    placer = NativeStopPlacer(
+        trader=trader,  # type: ignore[arg-type]
+        order_repo=OrderRepository(async_session_factory),
+        alerter=NullAlerter(),
+    )
+    result = await placer.place_stop_after_fill(sig, entry_id)
+    assert result.success is False
+    assert "insufficient balance" in (result.reason or "")
+    assert len(trader.calls) == 1  # no fallback attempted
+
+
+@pytest.mark.asyncio
+async def test_fallback_then_failed_still_retries_with_backoff(
+    fresh_db: None,  # noqa: ARG001
+) -> None:
+    """If the stop_limit fallback itself returns 'failed' (transient),
+    the outer 3-retry budget continues. The next attempt starts fresh
+    with stop_market again (the symbol's support might have changed).
+    """
+    sig = _signal("long")
+    _signal_id, entry_id = await _seed_signal_and_filled_entry(sig)
+
+    rejected_market = replace(
+        _stop_result(order_id=600, status="rejected"),
+        reason="not a valid order type",
+    )
+    failed_limit = replace(
+        _stop_result(order_id=601, status="failed"),
+        type="stop_limit",
+        reason="timeout",
+    )
+    second_attempt_success = replace(
+        _stop_result(order_id=602), type="stop_market"
+    )
+    trader = _StubTrader(
+        [rejected_market, failed_limit, second_attempt_success]
+    )
+    placer = NativeStopPlacer(
+        trader=trader,  # type: ignore[arg-type]
+        order_repo=OrderRepository(async_session_factory),
+        alerter=NullAlerter(),
+        backoffs=(0.0, 0.0, 0.0),
+    )
+    result = await placer.place_stop_after_fill(sig, entry_id)
+    assert result.success is True
+    assert result.attempts == 2  # backoff consumed one retry
+    assert len(trader.calls) == 3  # market, limit-fallback, market-retry
