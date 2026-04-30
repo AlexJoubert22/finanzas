@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from mib.ai.models import TaskType
 from mib.api.dependencies import (
     get_ai_router,
     get_news_service,
@@ -36,9 +37,14 @@ from mib.api.dependencies import (
     get_signal_repository,
     get_strategy_engine,
 )
+from mib.db.session import async_session_factory
 from mib.logger import logger
 from mib.services.scanner import PresetName
 from mib.telegram.formatters import fmt_signal_with_decision
+from mib.trading.ai_validations_repo import (
+    AIValidationRepository,
+    derive_request_hash,
+)
 from mib.trading.ai_validator import (
     AIValidationResult,
     TradeValidator,
@@ -105,6 +111,7 @@ async def scanner_to_signals_job(
         return 0
 
     validator = TradeValidator(get_ai_router())
+    ai_validations_repo = AIValidationRepository(async_session_factory)
 
     persisted_count = 0
     for sig in signals:
@@ -117,10 +124,10 @@ async def scanner_to_signals_job(
             continue
         persisted_count += 1
 
-        # ── AI Trade Validator (FASE 11.2) ───────────────────────────
+        # ── AI Trade Validator (FASE 11.2 + 11.5) ─────────────────────
         # Runs BEFORE RiskManager. If approve=False or confidence
         # below floor, signal flips to 'ai_rejected' and we skip risk
-        # evaluation entirely.
+        # evaluation entirely. ai_validations row written either way.
         validation: AIValidationResult | None = None
         try:
             validation = await _run_validator(validator, sig)
@@ -128,6 +135,11 @@ async def scanner_to_signals_job(
             logger.warning(
                 "scanner_to_signals: validator crashed for #{}: {} "
                 "(treating as ai_rejected)", persisted.id, exc,
+            )
+
+        if validation is not None:
+            await _persist_ai_validation(
+                ai_validations_repo, persisted.id, validation
             )
 
         if validation is not None and not validation.approve:
@@ -262,6 +274,35 @@ def _format_indicators(indicators: dict[str, float]) -> str:
     return "\n".join(
         f"- {key}: {value}" for key, value in sorted(indicators.items())
     )
+
+
+async def _persist_ai_validation(
+    repo: AIValidationRepository,
+    signal_id: int,
+    validation: AIValidationResult,
+) -> None:
+    """Write an ``ai_validations`` row for the call. Errors swallowed
+    (validator path must never crash the coordinator).
+    """
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    try:
+        request_hash = derive_request_hash(
+            signal_id, validation.rationale_short or ""
+        )
+        await repo.add(
+            signal_id=signal_id,
+            task_type=TaskType.TRADE_VALIDATE,
+            result=validation,
+            request_hash=request_hash,
+            decided_at=datetime.now(UTC).replace(tzinfo=None),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "ai_validator: failed to persist ai_validations row for #{}: {}",
+            signal_id,
+            exc,
+        )
 
 
 async def _mark_signal_ai_rejected(

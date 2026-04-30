@@ -654,6 +654,57 @@ class DailyPostmortemRow(Base):
     )
 
 
+# ─── AI validations (append-only, FASE 11.5) ─────────────────────────
+class AIValidationRow(Base):
+    """Append-only log of every TRADE_VALIDATE LLM call.
+
+    Born append-only — no UPDATE/DELETE: each (signal_id, attempt) is
+    a new row. Indices match the hot queries:
+    - ``(signal_id, decided_at DESC)``: latest validation per signal.
+    - ``(provider_used, decided_at DESC)``: per-provider latency /
+      success-rate diagnostics.
+
+    ``request_hash`` is sha256[:16] over (signal_id + prompt seed) so
+    re-run dedup is possible without storing the full prompt twice.
+    """
+
+    __tablename__ = "ai_validations"
+    __table_args__ = (
+        Index(
+            "ix_ai_validations_signal_decided",
+            "signal_id",
+            "decided_at",
+        ),
+        Index(
+            "ix_ai_validations_provider_decided",
+            "provider_used",
+            "decided_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    signal_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("signals.id"), nullable=False
+    )
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_used: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
+    model_used: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_hash: Mapped[str] = mapped_column(String(32), nullable=False)
+    response_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    approve: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    confidence: Mapped[Decimal] = mapped_column(
+        Numeric(precision=5, scale=4), nullable=False, default=Decimal("0")
+    )
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
 # ─── Reconciliation (FASE 9.5) ────────────────────────────────────────
 class PortfolioSnapshotRow(Base):
     """Persisted snapshot of :class:`PortfolioSnapshot` for diagnostics.
