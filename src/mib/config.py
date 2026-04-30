@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     # Rolling 1h cap on approved signals (8.4d). Defensive against
     # runaway signal generation from bugs or extreme regimes.
     max_signals_per_hour: int = Field(default=2, ge=1, le=100)
+    # Risk-based sizing parameters (8.5). Defaults locked in
+    # strategic session 2026-04-28; overrides require operator
+    # confirmation in a future session, never tune at runtime.
+    risk_per_trade_pct: float = Field(default=0.005, gt=0.0, le=0.05)
+    max_position_pct: float = Field(default=0.10, gt=0.0, le=1.0)
+    min_notional_quote: float = Field(default=10.0, ge=0.0)
 
     # ─── Runtime tuning ─────────────────────────────────────────────
     malloc_arena_max: int = 2

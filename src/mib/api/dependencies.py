@@ -41,6 +41,7 @@ from mib.trading.risk.protocol import Gate
 from mib.trading.risk.repo import RiskDecisionRepository
 from mib.trading.risk.state import TradingStateService
 from mib.trading.signal_repo import SignalRepository
+from mib.trading.sizing import PositionSizer
 from mib.trading.strategy import StrategyEngine
 
 _ccxt: CCXTReader | None = None
@@ -266,7 +267,7 @@ def get_risk_manager() -> RiskManager:
             MaxConcurrentTradesGate(signals_repo),
             SignalsPerHourRateLimitGate(async_session_factory),
         ]
-        _risk_manager = RiskManager(gates=gates)
+        _risk_manager = RiskManager(gates=gates, sizer=PositionSizer())
     return _risk_manager
 
 

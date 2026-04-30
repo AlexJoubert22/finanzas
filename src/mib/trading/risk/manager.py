@@ -24,13 +24,20 @@ from mib.models.portfolio import PortfolioSnapshot
 from mib.trading.risk.decision import RiskDecision
 from mib.trading.risk.protocol import Gate, GateResult
 from mib.trading.signals import PersistedSignal
+from mib.trading.sizing import PositionSizer
 
 
 class RiskManager:
     """Iterate over gates, short-circuit on first reject."""
 
-    def __init__(self, gates: list[Gate]) -> None:
+    def __init__(
+        self, gates: list[Gate], *, sizer: PositionSizer | None = None
+    ) -> None:
         self._gates: list[Gate] = list(gates)
+        # Sizer is optional so gate-only tests can construct a manager
+        # without piping the sizer dependency through. Production
+        # always provides one (FASE 8.5 wiring in dependencies.py).
+        self._sizer = sizer
 
     @property
     def gates(self) -> tuple[Gate, ...]:
@@ -80,6 +87,24 @@ class RiskManager:
         else:
             reasoning = f"rejected by {rejecting_gate}: {results[-1].reason}"
 
+        # FASE 8.5: if the gates passed, run the sizer. A sizer that
+        # returns 0 (e.g. min_notional unreachable) flips the decision
+        # to approved=False with a composed reason.
+        sized_amount = None
+        if approved and self._sizer is not None:
+            sizer_result = self._sizer.size(signal, portfolio, settings)
+            if sizer_result.amount > 0:
+                sized_amount = sizer_result.amount
+                reasoning += f" | sized: {sizer_result.reasoning}"
+            else:
+                approved = False
+                reasoning += f" | sizer rejected: {sizer_result.reasoning}"
+                logger.info(
+                    "risk_manager: sizer rejected signal_id={} reason={}",
+                    persisted.id,
+                    sizer_result.reasoning,
+                )
+
         return RiskDecision(
             signal_id=persisted.id,
             version=version,
@@ -87,5 +112,5 @@ class RiskManager:
             gate_results=tuple(results),
             reasoning=reasoning,
             decided_at=datetime.now(UTC),
-            sized_amount=None,  # filled in FASE 8.5
+            sized_amount=sized_amount,
         )

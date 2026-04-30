@@ -420,4 +420,4 @@ def _coerce_side(raw: str) -> Side:
 def _coerce_status(raw: str) -> SignalStatus:
     if raw not in SIGNAL_STATUSES:
         raise ValueError(f"unexpected status in DB row: {raw!r}")
-    return raw  # type: ignore[return-value]
+    return raw
