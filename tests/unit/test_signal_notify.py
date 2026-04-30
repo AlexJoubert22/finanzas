@@ -130,6 +130,37 @@ class _FakeDecisionRepo:
         return decision
 
 
+class _NoopValidator:
+    """Bypasses the FASE 11.2 AI validator — auto-approves with size=1.0.
+
+    Used by the existing FASE 7/8 coordinator tests so they don't hit
+    the real AIRouter (no API keys in unit-test env). The dedicated
+    validator tests live in ``test_ai_validator.py``.
+    """
+
+    async def validate(
+        self,
+        signal: Any,  # noqa: ARG002
+        *,
+        macro_context: str = "",  # noqa: ARG002
+        news_context: str = "",  # noqa: ARG002
+        indicators_context: str = "",  # noqa: ARG002
+    ) -> Any:
+        from mib.trading.ai_validator import AIValidationResult  # noqa: PLC0415
+
+        return AIValidationResult(
+            success=True,
+            approve=True,
+            confidence=Decimal("0.8"),
+            concerns=("noop_validator_test_fake",),
+            size_modifier=Decimal("1.0"),
+            rationale_short="test fake — auto-approve",
+            provider_used="fake",
+            model_used="fake",
+            latency_ms=0,
+        )
+
+
 def _patch_deps(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -156,6 +187,14 @@ def _patch_deps(
         "get_portfolio_state",
         lambda: portfolio_state or _FakePortfolioState(),
     )
+    # FASE 11.2 — bypass the AI validator in the existing coordinator
+    # tests. The validator is exercised in test_ai_validator.py.
+    monkeypatch.setattr(
+        notify_mod,
+        "TradeValidator",
+        lambda router: _NoopValidator(),  # noqa: ARG005
+    )
+    monkeypatch.setattr(notify_mod, "get_ai_router", lambda: None)
 
 
 @pytest.mark.asyncio

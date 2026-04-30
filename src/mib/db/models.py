@@ -187,7 +187,8 @@ class SignalRow(Base):
             "side IN ('long', 'short', 'flat')", name="ck_signals_side"
         ),
         CheckConstraint(
-            "status IN ('pending', 'expired', 'consumed', 'cancelled')",
+            "status IN ('pending', 'expired', 'consumed', "
+            "'cancelled', 'ai_rejected')",
             name="ck_signals_status",
         ),
     )
