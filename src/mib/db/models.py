@@ -476,6 +476,52 @@ class TradingState(Base):
     )
 
 
+# ─── Mode transitions (append-only, FASE 10.2) ───────────────────────
+class ModeTransitionRow(Base):
+    """Append-only audit log of every TradingMode transition.
+
+    Born append-only: each transition is a new row with the
+    ``transitioned_at`` timestamp and the ``mode_started_at_after_
+    transition`` field that anchors the temporal guards (FASE 10.3).
+    Direct UPDATE/DELETE forbidden by convention.
+
+    Indices match the hot queries:
+    - ``transitioned_at DESC`` — most recent transition lookup.
+    - ``(to_mode, transitioned_at DESC)`` — "days in mode X" guards.
+    """
+
+    __tablename__ = "mode_transitions"
+    __table_args__ = (
+        Index("ix_mode_transitions_transitioned_at_desc", "transitioned_at"),
+        Index(
+            "ix_mode_transitions_to_mode_transitioned_at",
+            "to_mode",
+            "transitioned_at",
+        ),
+        CheckConstraint(
+            "from_mode IN ('off', 'shadow', 'paper', 'semi_auto', 'live')",
+            name="ck_mode_transitions_from_mode",
+        ),
+        CheckConstraint(
+            "to_mode IN ('off', 'shadow', 'paper', 'semi_auto', 'live')",
+            name="ck_mode_transitions_to_mode",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    from_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    to_mode: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    transitioned_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    override_used: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    mode_started_at_after_transition: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False
+    )
+
+
 # ─── Risk decisions (append-only, FASE 8.3) ──────────────────────────
 class RiskDecisionRow(Base):
     """Append-only log of every RiskManager evaluation.

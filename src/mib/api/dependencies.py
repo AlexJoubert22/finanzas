@@ -251,15 +251,19 @@ def get_ccxt_trader() -> CCXTTrader:
 def get_mode_service() -> ModeService:
     """FASE 10+ trading mode reader/transitioner.
 
-    Backed by the same ``trading_state`` singleton. The
-    ``ModeTransitionRepository`` (audit log) is wired in FASE 10.2;
-    until then the service still works (cache update only).
+    Backed by the ``trading_state`` singleton (cache) plus
+    :class:`ModeTransitionRepository` for the append-only audit log.
     """
     global _mode_service  # noqa: PLW0603
     if _mode_service is None:
+        from mib.trading.mode_transitions_repo import (  # noqa: PLC0415
+            ModeTransitionRepository,
+        )
+
         _mode_service = ModeService(
             session_factory=async_session_factory,
             state_service=get_trading_state_service(),
+            transitions_repo=ModeTransitionRepository(async_session_factory),
         )
     return _mode_service
 
