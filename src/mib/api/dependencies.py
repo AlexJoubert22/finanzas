@@ -399,9 +399,13 @@ def get_risk_manager() -> RiskManager:
     """FASE 8.3+ orchestrator. Gates registered in priority order
     (cheapest reject first). Each FASE 8.4 sub-commit appends the
     next gate behind the kill switch + DD pair.
+
+    FASE 11.6: when ``settings.risk_use_ai_confidence`` is True, the
+    chain also includes :class:`MinAIConfidenceGate` (off by default).
     """
     global _risk_manager  # noqa: PLW0603
     if _risk_manager is None:
+        s = get_settings()
         state = get_trading_state_service()
         signals_repo = get_signal_repository()
         decisions_repo = get_risk_decision_repository()
@@ -415,6 +419,15 @@ def get_risk_manager() -> RiskManager:
             MaxConcurrentTradesGate(signals_repo),
             SignalsPerHourRateLimitGate(async_session_factory),
         ]
+        if s.risk_use_ai_confidence:
+            from mib.trading.risk.gates.min_ai_confidence import (  # noqa: PLC0415
+                MinAIConfidenceGate,
+            )
+            gates.append(
+                MinAIConfidenceGate(
+                    threshold=s.min_ai_confidence_threshold
+                )
+            )
         _risk_manager = RiskManager(gates=gates, sizer=PositionSizer())
     return _risk_manager
 

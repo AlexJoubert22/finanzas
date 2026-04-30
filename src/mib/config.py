@@ -107,6 +107,15 @@ class Settings(BaseSettings):
     # strategic session 2026-04-28; overrides require operator
     # confirmation in a future session, never tune at runtime.
     risk_per_trade_pct: float = Field(default=0.005, gt=0.0, le=0.05)
+    # FASE 11.6 — opt-in MinAIConfidenceGate. False by default so the
+    # FASE 8 chain is unchanged until the operator explicitly trusts
+    # the AI Validator's confidence as a hard gate. When True, a gate
+    # rejecting signals with confidence_ai < min_ai_confidence_threshold
+    # is appended to the chain.
+    risk_use_ai_confidence: bool = False
+    min_ai_confidence_threshold: float = Field(
+        default=0.55, ge=0.0, le=1.0
+    )
     max_position_pct: float = Field(default=0.10, gt=0.0, le=1.0)
     min_notional_quote: float = Field(default=10.0, ge=0.0)
 

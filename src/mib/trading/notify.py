@@ -141,6 +141,20 @@ async def scanner_to_signals_job(
             await _persist_ai_validation(
                 ai_validations_repo, persisted.id, validation
             )
+            # FASE 11.6: backpopulate confidence_ai on the signal row
+            # so MinAIConfidenceGate (and any analytics) can read it.
+            if validation.success:
+                try:
+                    await repo.set_ai_confidence(
+                        persisted.id,
+                        float(validation.confidence),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "ai_validator: set_ai_confidence failed for #{}: {}",
+                        persisted.id,
+                        exc,
+                    )
 
         if validation is not None and not validation.approve:
             await _mark_signal_ai_rejected(repo, persisted.id, validation)
