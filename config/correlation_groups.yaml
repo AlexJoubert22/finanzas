@@ -1,0 +1,28 @@
+# Correlation groups for ExposureGroupGate (FASE 8.4b).
+#
+# Each group caps the COMBINED exposure of its members as a fraction
+# of equity_quote. The gate rejects a new signal whose ticker belongs
+# to any group that would breach its cap.
+#
+# Editing this file requires a bot restart (no hot reload). Adding or
+# removing tickers does NOT need code changes — only changing the
+# *meaning* of group membership does.
+#
+# Defaults locked in strategic session 2026-04-28. Override only after
+# a documented decision.
+
+crypto_majors:
+  members: [BTC/USDT, ETH/USDT]
+  group_max_pct: 0.30
+
+crypto_l1_l2:
+  members: [SOL/USDT, AVAX/USDT, POL/USDT, ARB/USDT, OP/USDT, INJ/USDT]
+  group_max_pct: 0.20
+
+us_megacap_tech:
+  members: [AAPL, MSFT, NVDA, GOOGL, META]
+  group_max_pct: 0.25
+
+us_indices:
+  members: [SPY, QQQ]
+  group_max_pct: 0.40

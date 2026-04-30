@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     gemini_daily_limit: int = 1500
 
+    # NVIDIA Build (NIM API, OpenAI-compatible). Operator has 1-year
+    # subscription. Default daily limit is conservative; raise once
+    # actual usage shape is known.
+    nvidia_api_key: str = ""
+    nvidia_daily_limit: int = 10000
+    nvidia_base_url: str = "https://integrate.api.nvidia.com/v1"
+
     # ─── Data source keys ───────────────────────────────────────────
     alpha_vantage_api_key: str = ""
     finnhub_api_key: str = ""
@@ -76,6 +83,22 @@ class Settings(BaseSettings):
     trading_enabled: bool = False
     # Operational mode ladder; see ``mib.trading.mode.TradingMode``.
     trading_mode: TradingMode = TradingMode.OFF
+
+    # ─── Risk gates (FASE 8.4+) ─────────────────────────────────────
+    # Cap exposure to a single ticker: sum of realized notional + sized
+    # pending signals must stay below this fraction of equity.
+    max_exposure_per_ticker_pct: float = Field(default=0.15, gt=0.0, le=1.0)
+    # Hard cap on simultaneously open positions (8.4c).
+    max_concurrent_trades: int = Field(default=5, ge=1, le=50)
+    # Rolling 1h cap on approved signals (8.4d). Defensive against
+    # runaway signal generation from bugs or extreme regimes.
+    max_signals_per_hour: int = Field(default=2, ge=1, le=100)
+    # Risk-based sizing parameters (8.5). Defaults locked in
+    # strategic session 2026-04-28; overrides require operator
+    # confirmation in a future session, never tune at runtime.
+    risk_per_trade_pct: float = Field(default=0.005, gt=0.0, le=0.05)
+    max_position_pct: float = Field(default=0.10, gt=0.0, le=1.0)
+    min_notional_quote: float = Field(default=10.0, ge=0.0)
 
     # ─── Runtime tuning ─────────────────────────────────────────────
     malloc_arena_max: int = 2

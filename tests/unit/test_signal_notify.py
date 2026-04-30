@@ -2,24 +2,29 @@
 
 The job must:
 
-- Run StrategyEngine, persist every signal via repo, attempt to ship
-  each to Telegram.
+- Run StrategyEngine, persist every signal via repo, evaluate risk,
+  ship each card to Telegram.
 - Treat Telegram as best-effort — a failed send must NOT roll back
   the persisted row. The signal stays ``pending`` so /signals pending
   recovers it.
 - Tolerate a per-signal repo failure (skip that one, keep going).
 - Return the count of persisted rows, regardless of how many Telegram
-  messages succeeded.
+  messages succeeded or whether risk evaluation produced a decision.
+- Attach the approval keyboard only when the RiskDecision is
+  ``approved`` (FASE 8.6).
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import pytest
 
+from mib.models.portfolio import PortfolioSnapshot
 from mib.trading import notify as notify_mod
+from mib.trading.risk.decision import RiskDecision
 from mib.trading.signals import PersistedSignal, Signal
 
 
@@ -88,11 +93,69 @@ class _FakeApp:
         self.bot = bot
 
 
+class _FakePortfolioState:
+    async def snapshot(self) -> PortfolioSnapshot:
+        return PortfolioSnapshot(
+            balances=[],
+            positions=[],
+            equity_quote=Decimal(0),
+            last_synced_at=datetime.now(UTC),
+            source="dry-run",
+        )
+
+
+class _FakeRiskManager:
+    def __init__(self, *, approve: bool = True) -> None:
+        self._approve = approve
+
+    async def evaluate(self, persisted: PersistedSignal, portfolio: Any, *, version: int = 1) -> RiskDecision:  # noqa: ARG002
+        return RiskDecision(
+            signal_id=persisted.id,
+            version=version,
+            approved=self._approve,
+            gate_results=(),
+            reasoning="fake decision",
+            decided_at=datetime.now(UTC),
+            sized_amount=Decimal("100") if self._approve else None,
+        )
+
+
+class _FakeDecisionRepo:
+    def __init__(self) -> None:
+        self.added: list[RiskDecision] = []
+
+    async def append_with_retry(self, signal_id: int, factory: Any, *, max_retries: int = 3) -> RiskDecision:  # noqa: ARG002
+        decision = factory(1)
+        self.added.append(decision)
+        return decision
+
+
 def _patch_deps(
-    monkeypatch: pytest.MonkeyPatch, *, engine: _FakeEngine, repo: _FakeRepo
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    engine: _FakeEngine,
+    repo: _FakeRepo,
+    risk_manager: _FakeRiskManager | None = None,
+    decision_repo: _FakeDecisionRepo | None = None,
+    portfolio_state: _FakePortfolioState | None = None,
 ) -> None:
     monkeypatch.setattr(notify_mod, "get_strategy_engine", lambda: engine)
     monkeypatch.setattr(notify_mod, "get_signal_repository", lambda: repo)
+    monkeypatch.setattr(
+        notify_mod,
+        "get_risk_manager",
+        lambda: risk_manager or _FakeRiskManager(),
+    )
+    monkeypatch.setattr(
+        notify_mod,
+        "get_risk_decision_repository",
+        lambda: decision_repo or _FakeDecisionRepo(),
+    )
+    monkeypatch.setattr(
+        notify_mod,
+        "get_portfolio_state",
+        lambda: portfolio_state or _FakePortfolioState(),
+    )
 
 
 @pytest.mark.asyncio
@@ -133,8 +196,35 @@ async def test_each_signal_persisted_and_shipped_to_telegram(
     assert len(repo.added) == 2
     assert len(bot.calls) == 2
     assert all(c["chat_id"] == 42 for c in bot.calls)
-    # Each call carries the keyboard.
+    # Approved decisions → each call carries the keyboard.
     assert all(c.get("reply_markup") is not None for c in bot.calls)
+
+
+@pytest.mark.asyncio
+async def test_rejected_decision_omits_keyboard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the risk manager rejects, the Telegram card has no buttons."""
+    engine = _FakeEngine([_signal()])
+    repo = _FakeRepo()
+    bot = _FakeBot()
+    _patch_deps(
+        monkeypatch,
+        engine=engine,
+        repo=repo,
+        risk_manager=_FakeRiskManager(approve=False),
+    )
+
+    count = await notify_mod.scanner_to_signals_job(
+        _FakeApp(bot),  # type: ignore[arg-type]
+        preset="oversold",
+        tickers=["BTC/USDT"],
+        notify_chat_id=42,
+    )
+    assert count == 1
+    assert len(bot.calls) == 1
+    # No reply_markup on rejected signals.
+    assert bot.calls[0].get("reply_markup") is None
 
 
 @pytest.mark.asyncio

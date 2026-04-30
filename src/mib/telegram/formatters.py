@@ -302,6 +302,21 @@ def fmt_status(payload: dict[str, Any]) -> str:
         for provider, frac in quotas.items():
             pct = f"{float(frac) * 100:.1f}%"
             lines.append(f"  {esc(provider)}: {pct}")
+
+    portfolio = payload.get("portfolio")
+    if portfolio:
+        lines.append("")
+        lines.append("<b>Portfolio</b>")
+        equity = portfolio.get("equity_quote")
+        if equity is not None:
+            lines.append(f"  Equity: <code>{esc(equity)} EUR</code>")
+        lines.append(f"  Posiciones abiertas: {portfolio.get('open_positions', 0)}")
+        age = portfolio.get("last_synced_age_seconds")
+        if age is not None:
+            lines.append(f"  Último sync: hace {int(age)}s")
+        source = portfolio.get("source")
+        if source:
+            lines.append(f"  Fuente: <i>{esc(source)}</i>")
     return "\n".join(lines)
 
 
@@ -343,6 +358,50 @@ def fmt_signal_card(persisted: Any, *, include_id: bool = True) -> str:
     return "\n".join(lines)
 
 
+def fmt_signal_with_decision(
+    persisted: Any, decision: Any | None
+) -> str:
+    """Render a signal card augmented with the RiskManager outcome (FASE 8.6).
+
+    If ``decision`` is None (risk evaluation failed or skipped), falls
+    back to the plain signal card so the operator still sees
+    something. If ``decision.approved`` is False, the rejection reason
+    is shown and the caller is expected to drop the approval keyboard
+    (no buttons on rejected signals — there's nothing to approve).
+    """
+    base = fmt_signal_card(persisted)
+    if decision is None:
+        return base + "\n\n⚠️ <i>Risk evaluation no disponible.</i>"
+
+    lines: list[str] = []
+    if decision.approved:
+        lines.append("")
+        lines.append("🛡 <b>Risk: aprobada</b>")
+        if decision.sized_amount is not None:
+            lines.append(
+                f"  Sized: <code>{esc(decision.sized_amount)} EUR</code>"
+            )
+        passed_gates = ", ".join(
+            esc(r.gate_name) for r in decision.gate_results if r.passed
+        )
+        if passed_gates:
+            lines.append(f"  Gates pasadas: {passed_gates}")
+    else:
+        lines.append("")
+        lines.append("🚫 <b>Risk: rechazada</b>")
+        # Find the first failing gate.
+        rejecting = next(
+            (r for r in decision.gate_results if not r.passed), None
+        )
+        if rejecting is not None:
+            lines.append(f"  Gate: <code>{esc(rejecting.gate_name)}</code>")
+            lines.append(f"  Motivo: {esc(rejecting.reason)}")
+        else:
+            lines.append(f"  Motivo: {esc(decision.reasoning)}")
+    lines.append(f"  Decision #v{decision.version}")
+    return base + "\n" + "\n".join(lines)
+
+
 def fmt_pending_signals_list(persisted_signals: list[Any]) -> str:
     """Compact one-line-per-signal summary for ``/signals pending``."""
     if not persisted_signals:
@@ -372,6 +431,7 @@ __all__ = [
     "fmt_price_card",
     "fmt_scan_result",
     "fmt_signal_card",
+    "fmt_signal_with_decision",
     "fmt_status",
     "fmt_ts_utc",
     "fmt_watch_created",

@@ -19,12 +19,19 @@ flips the DB status so the operator knows the signal was acted on.
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Literal, cast
 
 from telegram import InlineKeyboardMarkup, Message, Update
 from telegram.ext import ContextTypes
 
-from mib.api.dependencies import get_signal_repository
+from mib.api.dependencies import (
+    get_portfolio_state,
+    get_risk_decision_repository,
+    get_risk_manager,
+    get_signal_repository,
+)
 from mib.indicators.charting import candles_dataframe, render_candles_png
 from mib.logger import logger
 from mib.services.market import MarketService
@@ -34,6 +41,13 @@ from mib.telegram.formatters import (
     fmt_signal_card,
 )
 from mib.trading.notify import scanner_to_signals_job
+from mib.trading.risk.decision import RiskDecision
+from mib.trading.signal_repo import StaleSignalStateError
+
+#: Threshold beyond which an approval re-evaluates risk before
+#: confirming. Keeps the operator's "✅" honest if the click lags the
+#: decision (e.g. they walked away from the chat for a while).
+_DECISION_STALE_AFTER = timedelta(minutes=5)
 
 _VALID_PRESETS = {"oversold", "breakout", "trending"}
 
@@ -142,22 +156,109 @@ async def on_signal_callback(
         await _send_chart(update, signal_id)
 
 
+def _actor_for(update: Update) -> str:
+    """Build the audit ``actor`` string from a Telegram update."""
+    user = update.effective_user
+    if user is None:
+        return "user:unknown"
+    return f"user:{user.id}"
+
+
 async def _consume_signal(update: Update, signal_id: int) -> None:
     query = update.callback_query
     if query is None:
         return
     repo = get_signal_repository()
-    updated = await repo.mark_status(signal_id, "consumed")
+    decision_repo = get_risk_decision_repository()
+
+    # Step 1: ensure we have a fresh RiskDecision. If the latest one
+    # is older than ``_DECISION_STALE_AFTER``, re-evaluate before
+    # confirming the operator's approval.
+    decision = await decision_repo.latest_for_signal(signal_id)
+    if decision is None or _decision_is_stale(decision):
+        persisted = await repo.get(signal_id)
+        if persisted is None:
+            await query.edit_message_text(
+                f"⚠️ Signal #{signal_id} no encontrada.", parse_mode="HTML"
+            )
+            return
+        try:
+            snapshot = await get_portfolio_state().snapshot()
+            initial = await get_risk_manager().evaluate(persisted, snapshot)
+
+            def _factory(version: int, _d: RiskDecision = initial) -> RiskDecision:
+                return replace(_d, version=version)
+
+            decision = await decision_repo.append_with_retry(
+                signal_id, _factory
+            )
+            logger.info(
+                "sig:ok: re-evaluated stale decision for signal_id={} v={}",
+                signal_id,
+                decision.version,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("sig:ok: re-evaluation failed for {}: {}", signal_id, exc)
+            await query.edit_message_text(
+                f"⚠️ No pude re-evaluar la signal #{signal_id}: {esc(str(exc))}",
+                parse_mode="HTML",
+            )
+            return
+
+    # Step 2: if the (possibly re-evaluated) decision is now rejected,
+    # surface the reason and refuse to transition.
+    if not decision.approved:
+        await query.edit_message_text(
+            f"⚠️ La re-evaluación rechazó la signal:\n\n{esc(decision.reasoning)}",
+            parse_mode="HTML",
+            reply_markup=_terminal_keyboard(),
+        )
+        return
+
+    # Step 3: transition with audit + sized_amount metadata.
+    metadata: dict[str, object] = {
+        "risk_decision_version": decision.version,
+    }
+    if decision.sized_amount is not None:
+        metadata["sized_amount_eur"] = str(decision.sized_amount)
+
+    try:
+        updated = await repo.transition(
+            signal_id,
+            "consumed",
+            actor=_actor_for(update),
+            event_type="approved",
+            expected_from_status="pending",
+            metadata=metadata,
+        )
+    except StaleSignalStateError as exc:
+        await query.edit_message_text(
+            f"⚠️ Signal #{signal_id} ya no está pendiente "
+            f"(estado actual: {esc(exc.actual)}).",
+            parse_mode="HTML",
+        )
+        return
     if updated is None:
         await query.edit_message_text(
             f"⚠️ Signal #{signal_id} no encontrada.", parse_mode="HTML"
         )
         return
     body = fmt_signal_card(updated)
-    body += "\n\n✅ <b>Aprobada</b> — pendiente de ejecución (FASE 9)."
+    body += (
+        f"\n\n✅ <b>Aprobada</b> — sized "
+        f"<code>{esc(decision.sized_amount)} EUR</code> "
+        f"(decision v{decision.version}). Pendiente de ejecución (FASE 9)."
+    )
     await query.edit_message_text(
         body, parse_mode="HTML", reply_markup=_terminal_keyboard()
     )
+
+
+def _decision_is_stale(decision: RiskDecision) -> bool:
+    decided = decision.decided_at
+    if decided.tzinfo is None:
+        decided = decided.replace(tzinfo=UTC)
+    return (datetime.now(UTC) - decided) > _DECISION_STALE_AFTER
 
 
 async def _cancel_signal(update: Update, signal_id: int) -> None:
@@ -165,7 +266,21 @@ async def _cancel_signal(update: Update, signal_id: int) -> None:
     if query is None:
         return
     repo = get_signal_repository()
-    updated = await repo.mark_status(signal_id, "cancelled")
+    try:
+        updated = await repo.transition(
+            signal_id,
+            "cancelled",
+            actor=_actor_for(update),
+            event_type="cancelled",
+            expected_from_status="pending",
+        )
+    except StaleSignalStateError as exc:
+        await query.edit_message_text(
+            f"⚠️ Signal #{signal_id} ya no está pendiente "
+            f"(estado actual: {esc(exc.actual)}).",
+            parse_mode="HTML",
+        )
+        return
     if updated is None:
         await query.edit_message_text(
             f"⚠️ Signal #{signal_id} no encontrada.", parse_mode="HTML"

@@ -13,7 +13,7 @@ from fastapi import FastAPI
 
 from mib import __version__
 from mib.api.dependencies import shutdown_sources
-from mib.api.routers import ask, health, macro, news, scan, symbol
+from mib.api.routers import ask, health, macro, news, portfolio, scan, symbol
 from mib.logger import logger
 from mib.scheduler import register_bot_jobs, start_scheduler, stop_scheduler
 from mib.telegram.bot import start_bot, stop_bot
@@ -60,5 +60,6 @@ def create_app() -> FastAPI:
     app.include_router(news.router)
     app.include_router(ask.router)
     app.include_router(scan.router)
+    app.include_router(portfolio.router)
 
     return app

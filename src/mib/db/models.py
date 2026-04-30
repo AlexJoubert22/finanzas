@@ -7,6 +7,7 @@ autogenerate machinery via `target_metadata = Base.metadata`.
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
@@ -20,6 +21,7 @@ from sqlalchemy import (
     Index,
     Integer,
     LargeBinary,
+    Numeric,
     String,
     Text,
     UniqueConstraint,
@@ -210,6 +212,114 @@ class SignalRow(Base):
         String(16), nullable=False, default="pending", index=True
     )
     status_updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # FASE 8.1: TTL — signal becomes 'expired' once expires_at < now and
+    # status is still 'pending'. Default = generated_at + 4 × timeframe_bars,
+    # computed at insert time by the repository (ttl_bars override allowed).
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True, index=True
+    )
+
+
+class SignalStatusEvent(Base):
+    """Append-only event log for transitions of :class:`SignalRow.status`.
+
+    Per ``ROADMAP.md`` Parte 0 append-only mandate: the mutable
+    ``signals.status`` column is a denormalised cache of the latest
+    event. Every transition writes a row here in the SAME transaction
+    that updates the cache.
+
+    The application-level helper :meth:`SignalRepository.transition`
+    is the only allowed mutation path. Direct ``UPDATE`` on
+    ``signals.status`` is forbidden by convention.
+    """
+
+    __tablename__ = "signal_status_events"
+    __table_args__ = (
+        Index("ix_signal_status_events_signal_id", "signal_id"),
+        Index("ix_signal_status_events_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    signal_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("signals.id"), nullable=False
+    )
+    # NULL on the "created" event (no prior state).
+    from_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    to_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    # One of: created | approved | cancelled | expired | consumed | reconciled
+    event_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    # user:<telegram_id> | job:<job_name> | system
+    actor: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+
+# ─── Trading state (singleton, FASE 8.3) ──────────────────────────────
+class TradingState(Base):
+    """Single-row config table holding the runtime kill switch + DD tracker.
+
+    The ``id = 1`` invariant is enforced via CHECK so any attempt to
+    insert a second row is rejected at the DB level. All mutations
+    flow through ``mib.trading.risk.state.TradingStateService.update``
+    which records ``last_modified_by`` (the actor) for audit.
+    """
+
+    __tablename__ = "trading_state"
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_trading_state_singleton"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    daily_dd_max_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.03)
+    total_dd_max_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.25)
+    killed_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_modified_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+    last_modified_by: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="system"
+    )
+
+
+# ─── Risk decisions (append-only, FASE 8.3) ──────────────────────────
+class RiskDecisionRow(Base):
+    """Append-only log of every RiskManager evaluation.
+
+    No row is ever UPDATEd or DELETEd in this table. Re-evaluating
+    the same signal produces a new row with ``version = previous + 1``
+    so the full decision history is recoverable. The composite
+    UNIQUE constraint on ``(signal_id, version)`` makes concurrent
+    appends with the same version impossible at the DB level —
+    callers detect the conflict and retry with a fresh version.
+    """
+
+    __tablename__ = "risk_decisions"
+    __table_args__ = (
+        Index("ix_risk_decisions_signal_id", "signal_id"),
+        UniqueConstraint(
+            "signal_id", "version", name="uq_risk_decisions_signal_version"
+        ),
+        CheckConstraint("version >= 1", name="ck_risk_decisions_version_positive"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    signal_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("signals.id"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    approved: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    gate_results_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False
+    )
+    sized_amount_quote: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=True
+    )
+    reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 # ─── Processed news (dedup) ───────────────────────────────────────────

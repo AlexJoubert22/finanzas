@@ -43,6 +43,15 @@ GEMINI_FLASH = "gemini-2.5-flash"
 GEMINI_FLASH_LITE = "gemini-2.5-flash-lite"
 
 
+# ─── NVIDIA Build (NIM API, OpenAI-compatible) ──────────────────────
+# Operator subscription provides 1-year access. Slugs centralised here
+# so a NVIDIA-side rename is a single-file change. Verified 2026-04-28.
+NVIDIA_REASONING = "deepseek-ai/deepseek-r1"
+NVIDIA_ANALYSIS = "nvidia/llama-3.3-nemotron-super-49b-v1"
+NVIDIA_FAST = "meta/llama-3.3-70b-instruct"
+NVIDIA_SUMMARY = "meta/llama-3.3-70b-instruct"
+
+
 class TaskType(StrEnum):
     """Categories that drive the fallback chain in AIRouter."""
 
@@ -63,3 +72,4 @@ class ProviderId(StrEnum):
     GROQ = "groq"
     OPENROUTER = "openrouter"
     GEMINI = "gemini"
+    NVIDIA = "nvidia"

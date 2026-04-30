@@ -10,6 +10,7 @@ from mib.ai.models import ProviderId
 from mib.ai.providers.base import AIProvider
 from mib.ai.providers.gemini_provider import GeminiProvider
 from mib.ai.providers.groq_provider import GroqProvider
+from mib.ai.providers.nvidia_provider import NvidiaProvider
 from mib.ai.providers.openrouter_provider import OpenRouterProvider
 from mib.ai.router import AIRouter
 from mib.db.session import async_session_factory
@@ -20,13 +21,27 @@ from mib.services.news import NewsService
 from mib.services.scanner import ScannerService
 from mib.sources.alphavantage import AlphaVantageSource
 from mib.sources.ccxt_reader import CCXTReader
+from mib.sources.ccxt_trader import CCXTTrader
 from mib.sources.coingecko import CoinGeckoSource
 from mib.sources.finnhub import FinnhubSource
 from mib.sources.fred import FREDSource
 from mib.sources.rss import RSSSource
 from mib.sources.tradingview_ta import TradingViewTASource
 from mib.sources.yfinance_source import YFinanceSource
+from mib.trading.portfolio import PortfolioState
+from mib.trading.risk.correlation_groups import CorrelationGroups
+from mib.trading.risk.gates.correlation_group import CorrelationGroupGate
+from mib.trading.risk.gates.daily_drawdown import DailyDrawdownGate
+from mib.trading.risk.gates.exposure_ticker import ExposurePerTickerGate
+from mib.trading.risk.gates.kill_switch import KillSwitchGate
+from mib.trading.risk.gates.max_concurrent import MaxConcurrentTradesGate
+from mib.trading.risk.gates.signals_rate_limit import SignalsPerHourRateLimitGate
+from mib.trading.risk.manager import RiskManager
+from mib.trading.risk.protocol import Gate
+from mib.trading.risk.repo import RiskDecisionRepository
+from mib.trading.risk.state import TradingStateService
 from mib.trading.signal_repo import SignalRepository
+from mib.trading.sizing import PositionSizer
 from mib.trading.strategy import StrategyEngine
 
 _ccxt: CCXTReader | None = None
@@ -47,6 +62,11 @@ _ai_service: AIService | None = None
 _scanner: ScannerService | None = None
 _strategy_engine: StrategyEngine | None = None
 _signal_repo: SignalRepository | None = None
+_ccxt_trader: CCXTTrader | None = None
+_portfolio_state: PortfolioState | None = None
+_trading_state_service: TradingStateService | None = None
+_risk_decision_repo: RiskDecisionRepository | None = None
+_risk_manager: RiskManager | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -147,6 +167,7 @@ def get_ai_router() -> AIRouter:
             ProviderId.GROQ: GroqProvider(),
             ProviderId.OPENROUTER: OpenRouterProvider(),
             ProviderId.GEMINI: GeminiProvider(),
+            ProviderId.NVIDIA: NvidiaProvider(),
         }
         _ai_router = AIRouter(providers=providers)
     return _ai_router
@@ -182,7 +203,77 @@ def get_signal_repository() -> SignalRepository:
     return _signal_repo
 
 
+def get_ccxt_trader() -> CCXTTrader:
+    """FASE 8+ executor singleton.
+
+    Returns the dry-run skeleton until FASE 9 wires real credentials.
+    Double seatbelt (``trading_enabled`` + per-instance ``dry_run``)
+    keeps writes locally short-circuited until then.
+    """
+    global _ccxt_trader  # noqa: PLW0603
+    if _ccxt_trader is None:
+        _ccxt_trader = CCXTTrader(exchange_id="binance")
+    return _ccxt_trader
+
+
+def get_portfolio_state() -> PortfolioState:
+    """FASE 8.2+ portfolio cache, refreshed by `portfolio_sync_job`."""
+    global _portfolio_state  # noqa: PLW0603
+    if _portfolio_state is None:
+        _portfolio_state = PortfolioState(trader=get_ccxt_trader())
+    return _portfolio_state
+
+
+def get_trading_state_service() -> TradingStateService:
+    """FASE 8.3+ singleton ``trading_state`` row reader/updater."""
+    global _trading_state_service  # noqa: PLW0603
+    if _trading_state_service is None:
+        _trading_state_service = TradingStateService(async_session_factory)
+    return _trading_state_service
+
+
+def get_risk_decision_repository() -> RiskDecisionRepository:
+    """FASE 8.3+ append-only repository for ``risk_decisions``."""
+    global _risk_decision_repo  # noqa: PLW0603
+    if _risk_decision_repo is None:
+        _risk_decision_repo = RiskDecisionRepository(async_session_factory)
+    return _risk_decision_repo
+
+
+def get_correlation_groups() -> CorrelationGroups:
+    """Cached load of ``config/correlation_groups.yaml`` (FASE 8.4b)."""
+    from pathlib import Path  # noqa: PLC0415
+
+    return CorrelationGroups.from_yaml(Path("config/correlation_groups.yaml"))
+
+
+def get_risk_manager() -> RiskManager:
+    """FASE 8.3+ orchestrator. Gates registered in priority order
+    (cheapest reject first). Each FASE 8.4 sub-commit appends the
+    next gate behind the kill switch + DD pair.
+    """
+    global _risk_manager  # noqa: PLW0603
+    if _risk_manager is None:
+        state = get_trading_state_service()
+        signals_repo = get_signal_repository()
+        decisions_repo = get_risk_decision_repository()
+        gates: list[Gate] = [
+            KillSwitchGate(state),
+            DailyDrawdownGate(state, async_session_factory),
+            ExposurePerTickerGate(signals_repo, decisions_repo),
+            CorrelationGroupGate(
+                get_correlation_groups(), signals_repo, decisions_repo
+            ),
+            MaxConcurrentTradesGate(signals_repo),
+            SignalsPerHourRateLimitGate(async_session_factory),
+        ]
+        _risk_manager = RiskManager(gates=gates, sizer=PositionSizer())
+    return _risk_manager
+
+
 async def shutdown_sources() -> None:
     """Close long-lived connections (called from FastAPI lifespan)."""
     if _ccxt is not None:
         await _ccxt.close()
+    if _ccxt_trader is not None:
+        await _ccxt_trader.close()

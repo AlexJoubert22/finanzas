@@ -164,6 +164,80 @@ async def test_airouter_all_providers_fail(fresh_db: None) -> None:  # noqa: ARG
 
 
 @pytest.mark.asyncio
+async def test_airouter_nvidia_primary_on_analysis(fresh_db: None) -> None:  # noqa: ARG001
+    """FASE 8 NVIDIA pre-tweak: NVIDIA is now the primary on ANALYSIS.
+
+    With all providers available and successful, the router must pick
+    NVIDIA first (replacing GROQ as the previous primary). This test
+    pins the ordering so a future re-shuffle of FALLBACK_CHAINS that
+    accidentally demotes NVIDIA on ANALYSIS gets caught.
+    """
+    nv = _StubProvider(
+        ProviderId.NVIDIA,
+        available=True,
+        outcomes=[AIResponse(success=True, content="from-nvidia", latency_ms=300)],
+    )
+    groq = _StubProvider(
+        ProviderId.GROQ,
+        available=True,
+        outcomes=[AIResponse(success=True, content="unused", latency_ms=50)],
+    )
+    opnr = _StubProvider(
+        ProviderId.OPENROUTER,
+        available=True,
+        outcomes=[AIResponse(success=True, content="unused")],
+    )
+    gemi = _StubProvider(
+        ProviderId.GEMINI,
+        available=True,
+        outcomes=[AIResponse(success=True, content="unused")],
+    )
+    router = AIRouter(
+        {
+            ProviderId.NVIDIA: nv,
+            ProviderId.GROQ: groq,
+            ProviderId.OPENROUTER: opnr,
+            ProviderId.GEMINI: gemi,
+        }
+    )
+    resp = await router.complete(
+        AITask(prompt="analyse", task_type=TaskType.ANALYSIS, max_tokens=50)
+    )
+    assert resp.success is True
+    assert resp.provider == ProviderId.NVIDIA
+    assert resp.content == "from-nvidia"
+    assert nv.calls == 1
+    assert groq.calls == 0
+    assert opnr.calls == 0
+    assert gemi.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_airouter_analysis_falls_to_groq_when_nvidia_absent(
+    fresh_db: None,  # noqa: ARG001
+) -> None:
+    """When NVIDIA is not configured (no key), GROQ takes ANALYSIS.
+
+    Captures the existing behaviour for installations without a NVIDIA
+    Build subscription — the chain still works.
+    """
+    groq = _StubProvider(
+        ProviderId.GROQ,
+        available=True,
+        outcomes=[AIResponse(success=True, content="from-groq", latency_ms=50)],
+    )
+    opnr = _StubProvider(
+        ProviderId.OPENROUTER,
+        available=True,
+        outcomes=[AIResponse(success=True, content="unused")],
+    )
+    router = AIRouter({ProviderId.GROQ: groq, ProviderId.OPENROUTER: opnr})
+    resp = await router.complete(AITask(prompt="p", task_type=TaskType.ANALYSIS))
+    assert resp.success is True
+    assert resp.provider == ProviderId.GROQ
+
+
+@pytest.mark.asyncio
 async def test_airouter_logs_attempts_to_db(fresh_db: None) -> None:  # noqa: ARG001
     """Every attempt, success or failure, must append a row to ai_calls."""
     from mib.db.models import AICall
