@@ -225,21 +225,39 @@ async def test_link_to_trade_backpopulates(
 ) -> None:
     """``link_to_trade`` sets trade_id without writing an event row.
 
-    The trades table doesn't exist until 9.4, so we use a
-    placeholder int — the FK is added in 9.4's migration.
+    Since FASE 9.4 added the FK ``orders.trade_id -> trades.id``, the
+    target trade row must exist before linking — we seed a real
+    :class:`Trade` via :class:`TradeRepository`.
     """
+    from decimal import Decimal as _Decimal  # noqa: PLC0415
+
+    from mib.trading.trade_repo import TradeRepository  # noqa: PLC0415
+    from mib.trading.trades import TradeInputs  # noqa: PLC0415
+
     sid = await _seed_signal()
     o = await repo.add_or_get(
         _signal_inputs(sid), exchange_id="binance_sandbox", raw_payload={}
     )
-    await repo.link_to_trade(o.order_id, trade_id=42)
+    trade_repo = TradeRepository(async_session_factory)
+    trade = await trade_repo.add(
+        TradeInputs(
+            signal_id=sid,
+            ticker="BTC/USDT",
+            side="long",
+            size=_Decimal("0.001"),
+            entry_price=_Decimal("60000"),
+            stop_loss_price=_Decimal("58800"),
+            exchange_id="binance_sandbox",
+        )
+    )
+    await repo.link_to_trade(o.order_id, trade_id=trade.trade_id)
     # Verify by reading the raw row through a fresh query.
     from mib.db.models import OrderRow  # noqa: PLC0415
 
     async with async_session_factory() as session:
         row = await session.get(OrderRow, o.order_id)
         assert row is not None
-        assert row.trade_id == 42
+        assert row.trade_id == trade.trade_id
     # No event row was written.
     events = await repo.list_events(o.order_id)
     assert len(events) == 1  # only the original 'created'

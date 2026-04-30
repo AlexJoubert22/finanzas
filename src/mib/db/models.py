@@ -378,11 +378,14 @@ class OrderRow(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    # NOTE: trade_id is plain Integer here; the FK to trades(id) is
-    # added in FASE 9.4's migration once the trades table exists.
+    # FK to trades(id) is added by FASE 9.4's migration via
+    # batch_alter_table once the trades table exists. Declared here
+    # so future autogenerate runs don't try to drop the constraint.
     # Backpopulated by ``link_orders_to_trade`` when the matching
     # trade transitions pending → open.
-    trade_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    trade_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("trades.id"), nullable=True
+    )
     signal_id: Mapped[int] = mapped_column(
         Integer, ForeignKey("signals.id"), nullable=False
     )
@@ -502,6 +505,81 @@ class RiskDecisionRow(Base):
     )
     reasoning: Mapped[str] = mapped_column(Text, nullable=False)
     decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+# ─── Reconciliation (FASE 9.5) ────────────────────────────────────────
+class PortfolioSnapshotRow(Base):
+    """Persisted snapshot of :class:`PortfolioSnapshot` for diagnostics.
+
+    Written by the reconciler each run so post-incident analysis can
+    rebuild "what did the bot believe equity was at 14:32 UTC?". The
+    reconciler also uses the previous snapshot to detect a balance
+    drift > 1% relative to the exchange's reported equity.
+
+    Append-only: never UPDATE, never DELETE. ``balances_json`` and
+    ``positions_json`` carry the full structured payload for replay.
+    """
+
+    __tablename__ = "portfolio_snapshots"
+    __table_args__ = (
+        Index("ix_portfolio_snapshots_taken_at", "taken_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    taken_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    quote_currency: Mapped[str] = mapped_column(String(8), nullable=False)
+    equity_quote: Mapped[Decimal] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=False
+    )
+    balances_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    positions_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+
+
+class ReconcileRunRow(Base):
+    """One reconciliation pass, summarised + raw discrepancy payload.
+
+    The reconciler queries the exchange for open orders/positions,
+    diffs against ``orders`` + ``trades`` rows, and writes a row here
+    with three counters (orphan_exchange, orphan_db, balance_drift)
+    plus a JSON list of every individual discrepancy. Operators can
+    page through history via ``/reconcile`` or via direct DB.
+    """
+
+    __tablename__ = "reconcile_runs"
+    __table_args__ = (
+        Index("ix_reconcile_runs_started_at", "started_at"),
+        CheckConstraint(
+            "status IN ('ok', 'discrepancies', 'error')",
+            name="ck_reconcile_runs_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    triggered_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    orphan_exchange_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    orphan_db_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    balance_drift_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    discrepancies_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    portfolio_snapshot_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("portfolio_snapshots.id"), nullable=True
+    )
 
 
 # ─── Processed news (dedup) ───────────────────────────────────────────

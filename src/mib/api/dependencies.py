@@ -29,7 +29,9 @@ from mib.sources.fred import FREDSource
 from mib.sources.rss import RSSSource
 from mib.sources.tradingview_ta import TradingViewTASource
 from mib.sources.yfinance_source import YFinanceSource
+from mib.trading.order_repo import OrderRepository
 from mib.trading.portfolio import PortfolioState
+from mib.trading.reconcile import Reconciler
 from mib.trading.risk.correlation_groups import CorrelationGroups
 from mib.trading.risk.gates.correlation_group import CorrelationGroupGate
 from mib.trading.risk.gates.daily_drawdown import DailyDrawdownGate
@@ -68,6 +70,8 @@ _portfolio_state: PortfolioState | None = None
 _trading_state_service: TradingStateService | None = None
 _risk_decision_repo: RiskDecisionRepository | None = None
 _risk_manager: RiskManager | None = None
+_order_repo: OrderRepository | None = None
+_reconciler: Reconciler | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -204,6 +208,14 @@ def get_signal_repository() -> SignalRepository:
     return _signal_repo
 
 
+def get_order_repository() -> OrderRepository:
+    """FASE 9.2+ persistence boundary for the ``orders`` table."""
+    global _order_repo  # noqa: PLW0603
+    if _order_repo is None:
+        _order_repo = OrderRepository(async_session_factory)
+    return _order_repo
+
+
 def get_ccxt_trader() -> CCXTTrader:
     """FASE 9.1+ executor singleton, wired to Binance Testnet.
 
@@ -222,8 +234,26 @@ def get_ccxt_trader() -> CCXTTrader:
             api_secret=s.binance_sandbox_secret,
             base_url=s.binance_sandbox_base_url,
             dry_run=not s.trading_enabled,
+            order_repo=get_order_repository(),
         )
     return _ccxt_trader
+
+
+def get_reconciler() -> Reconciler:
+    """FASE 9.5+ reconciler singleton wired to the live trader.
+
+    Polls open orders on Binance Testnet every 5 min via
+    ``reconcile_job`` and on operator demand via ``/reconcile``.
+    """
+    global _reconciler  # noqa: PLW0603
+    if _reconciler is None:
+        _reconciler = Reconciler(
+            trader=get_ccxt_trader(),
+            portfolio_state=get_portfolio_state(),
+            order_repo=get_order_repository(),
+            session_factory=async_session_factory,
+        )
+    return _reconciler
 
 
 def get_portfolio_state() -> PortfolioState:
