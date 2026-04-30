@@ -462,6 +462,12 @@ class TradingState(Base):
     daily_dd_max_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.03)
     total_dd_max_pct: Mapped[float] = mapped_column(Float, nullable=False, default=0.25)
     killed_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # FASE 10.1: persisted current trading mode. Read at boot so the
+    # bot remembers its mode across restarts. Mutated only via
+    # ``ModeService.transition_to``; direct UPDATE forbidden.
+    mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="off", server_default="off"
+    )
     last_modified_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.current_timestamp(), nullable=False
     )
