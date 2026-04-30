@@ -33,6 +33,7 @@ from mib.trading.alerter import NullAlerter, TelegramAlerter, TelegramBotAlerter
 from mib.trading.executor import OrderExecutor
 from mib.trading.fill_detector import FillDetector
 from mib.trading.mode_service import ModeService
+from mib.trading.news_reactor import NewsReactor
 from mib.trading.order_repo import OrderRepository
 from mib.trading.portfolio import PortfolioState
 from mib.trading.reconcile import Reconciler
@@ -81,6 +82,7 @@ _trade_repo: TradeRepository | None = None
 _reconciler: Reconciler | None = None
 _executor: OrderExecutor | None = None
 _mode_service: ModeService | None = None
+_news_reactor: NewsReactor | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -330,6 +332,23 @@ def get_reconciler() -> Reconciler:
             session_factory=async_session_factory,
         )
     return _reconciler
+
+
+def get_news_reactor() -> NewsReactor:
+    """FASE 11.3+ news reactor — proposes reduce/close/hold on positions.
+
+    Never auto-executes; only persists proposals + alerts the admin.
+    """
+    global _news_reactor  # noqa: PLW0603
+    if _news_reactor is None:
+        _news_reactor = NewsReactor(
+            ai_router=get_ai_router(),
+            news_service=get_news_service(),
+            trade_repo=get_trade_repository(),
+            session_factory=async_session_factory,
+            alerter=get_alerter(),
+        )
+    return _news_reactor
 
 
 def get_portfolio_state() -> PortfolioState:

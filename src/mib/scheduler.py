@@ -110,6 +110,18 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
 
+    # FASE 11.3 — News Reactor: propose reduce/close/hold every 5 min.
+    # Proposal-only — never executes. Operator decides via Telegram.
+    from mib.trading.jobs.news_reactor_job import news_reactor_job  # noqa: PLC0415
+
+    sched.add_job(
+        news_reactor_job,
+        trigger=IntervalTrigger(minutes=5),
+        id="news_reactor",
+        name="News reactor (proposals only)",
+        replace_existing=True,
+    )
+
     sched.start()
     # Fire once ASAP to populate the cache; fire-and-forget.
     import asyncio
@@ -118,7 +130,7 @@ def start_scheduler() -> None:
     asyncio.create_task(portfolio_sync_job())
     logger.info(
         "scheduler: started with health probe (5min) + expire_stale_signals (15min) "
-        "+ portfolio_sync (30s) + reconcile (5min)"
+        "+ portfolio_sync (30s) + reconcile (5min) + news_reactor (5min)"
     )
 
 

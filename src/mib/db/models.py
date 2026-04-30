@@ -560,6 +560,53 @@ class RiskDecisionRow(Base):
     decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
+# ─── News reactions (append-only, FASE 11.3) ─────────────────────────
+class NewsReactionRow(Base):
+    """Append-only log of news-reaction proposals.
+
+    The News Reactor runs every 5 min, picks news with strong sentiment
+    on tickers in open positions, and asks an LLM to propose
+    ``reduce | close | hold``. NEVER executes — only proposes via
+    Telegram. Each row is a new proposal; dedupe (no re-proposal in
+    30 min for the same news+ticker pair) is enforced by querying
+    this table on the ``(news_url_hash, ticker, decided_at)`` index.
+
+    ``news_url_hash`` is sha256 over the article URL or, when URL is
+    missing, sha256 over the headline. Avoids storing URLs of arbitrary
+    length on the index.
+    """
+
+    __tablename__ = "news_reactions"
+    __table_args__ = (
+        Index(
+            "ix_news_reactions_ticker_decided_at",
+            "ticker",
+            "decided_at",
+        ),
+        Index("ix_news_reactions_url_hash", "news_url_hash"),
+        CheckConstraint(
+            "decision IN ('reduce', 'close', 'hold')",
+            name="ck_news_reactions_decision",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    news_url_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    news_headline: Mapped[str] = mapped_column(String(512), nullable=False)
+    news_sentiment: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    position_trade_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("trades.id"), nullable=True
+    )
+    decision: Mapped[str] = mapped_column(String(8), nullable=False)
+    justification: Mapped[str] = mapped_column(Text, nullable=False)
+    ai_provider_used: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
+    ai_model_used: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
 # ─── Reconciliation (FASE 9.5) ────────────────────────────────────────
 class PortfolioSnapshotRow(Base):
     """Persisted snapshot of :class:`PortfolioSnapshot` for diagnostics.
