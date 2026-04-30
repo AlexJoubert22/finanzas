@@ -88,6 +88,11 @@ class Settings(BaseSettings):
     # Cap exposure to a single ticker: sum of realized notional + sized
     # pending signals must stay below this fraction of equity.
     max_exposure_per_ticker_pct: float = Field(default=0.15, gt=0.0, le=1.0)
+    # Hard cap on simultaneously open positions (8.4c).
+    max_concurrent_trades: int = Field(default=5, ge=1, le=50)
+    # Rolling 1h cap on approved signals (8.4d). Defensive against
+    # runaway signal generation from bugs or extreme regimes.
+    max_signals_per_hour: int = Field(default=2, ge=1, le=100)
 
     # ─── Runtime tuning ─────────────────────────────────────────────
     malloc_arena_max: int = 2

@@ -34,6 +34,8 @@ from mib.trading.risk.gates.correlation_group import CorrelationGroupGate
 from mib.trading.risk.gates.daily_drawdown import DailyDrawdownGate
 from mib.trading.risk.gates.exposure_ticker import ExposurePerTickerGate
 from mib.trading.risk.gates.kill_switch import KillSwitchGate
+from mib.trading.risk.gates.max_concurrent import MaxConcurrentTradesGate
+from mib.trading.risk.gates.signals_rate_limit import SignalsPerHourRateLimitGate
 from mib.trading.risk.manager import RiskManager
 from mib.trading.risk.protocol import Gate
 from mib.trading.risk.repo import RiskDecisionRepository
@@ -261,6 +263,8 @@ def get_risk_manager() -> RiskManager:
             CorrelationGroupGate(
                 get_correlation_groups(), signals_repo, decisions_repo
             ),
+            MaxConcurrentTradesGate(signals_repo),
+            SignalsPerHourRateLimitGate(async_session_factory),
         ]
         _risk_manager = RiskManager(gates=gates)
     return _risk_manager
