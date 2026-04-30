@@ -17,7 +17,7 @@ serializes through SQLite WAL.
 # here would require fetching live quotes for every pending signal
 # each tick, multiplying exchange calls. Defer to FASE 28 alongside
 # the calendar-awareness work, which already needs market data per
-# evaluation.
+# evaluation. Reaffirmed in FASE 8.7 strategic review 2026-04-28.
 """
 
 from __future__ import annotations

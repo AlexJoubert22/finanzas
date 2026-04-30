@@ -29,6 +29,11 @@ from mib.telegram import BotApp
 from mib.telegram.handlers.ask import ask as ask_handler
 from mib.telegram.handlers.callbacks import on_price_callback
 from mib.telegram.handlers.chart import chart as chart_handler
+from mib.telegram.handlers.emergency import (
+    freeze_cmd,
+    risk_cmd,
+    stop_cmd,
+)
 from mib.telegram.handlers.macro import macro as macro_handler
 from mib.telegram.handlers.news import news as news_handler
 from mib.telegram.handlers.price import price as price_handler
@@ -73,6 +78,13 @@ def build_application() -> BotApp:
 
     # Middleware first — group=-1 runs before command handlers.
     AuthMiddleware.install(app)
+
+    # Emergency commands at group=-1 so they bypass any blockage in the
+    # default group=0 chain. The middleware whitelist still applies
+    # because it also lives in group=-1 and runs first.
+    app.add_handler(CommandHandler("stop", stop_cmd), group=-1)
+    app.add_handler(CommandHandler("freeze", freeze_cmd), group=-1)
+    app.add_handler(CommandHandler("risk", risk_cmd), group=-1)
 
     # Commands
     app.add_handler(CommandHandler("start", start_handler))
