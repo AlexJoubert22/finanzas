@@ -268,6 +268,30 @@ class SignalRepository:
             rows = (await session.scalars(stmt)).all()
             return [_from_row(r) for r in rows]
 
+    async def list_by_ticker_and_status(
+        self,
+        ticker: str,
+        status: SignalStatus,
+        *,
+        limit: int = 100,
+    ) -> list[PersistedSignal]:
+        """Return signals matching ``ticker`` and ``status``.
+
+        Used by FASE 8.4a exposure gate to find approved-but-unexecuted
+        signals whose sized amount counts against the per-ticker cap.
+        """
+        if status not in SIGNAL_STATUSES:
+            raise ValueError(f"invalid SignalStatus: {status!r}")
+        async with self._sf() as session:
+            stmt = (
+                select(SignalRow)
+                .where(SignalRow.ticker == ticker, SignalRow.status == status)
+                .order_by(SignalRow.generated_at.desc())
+                .limit(limit)
+            )
+            rows = (await session.scalars(stmt)).all()
+            return [_from_row(r) for r in rows]
+
     async def list_by_strategy(
         self,
         strategy_id: str,

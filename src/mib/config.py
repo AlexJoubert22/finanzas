@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     # Operational mode ladder; see ``mib.trading.mode.TradingMode``.
     trading_mode: TradingMode = TradingMode.OFF
 
+    # ─── Risk gates (FASE 8.4+) ─────────────────────────────────────
+    # Cap exposure to a single ticker: sum of realized notional + sized
+    # pending signals must stay below this fraction of equity.
+    max_exposure_per_ticker_pct: float = Field(default=0.15, gt=0.0, le=1.0)
+
     # ─── Runtime tuning ─────────────────────────────────────────────
     malloc_arena_max: int = 2
 

@@ -131,6 +131,7 @@ module = [
   "mib.trading.risk.state",
   "mib.trading.risk.gates.kill_switch",
   "mib.trading.risk.gates.daily_drawdown",
+  "mib.trading.risk.gates.exposure_ticker",
 ]
 strict = true
 

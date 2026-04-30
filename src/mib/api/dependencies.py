@@ -30,6 +30,7 @@ from mib.sources.tradingview_ta import TradingViewTASource
 from mib.sources.yfinance_source import YFinanceSource
 from mib.trading.portfolio import PortfolioState
 from mib.trading.risk.gates.daily_drawdown import DailyDrawdownGate
+from mib.trading.risk.gates.exposure_ticker import ExposurePerTickerGate
 from mib.trading.risk.gates.kill_switch import KillSwitchGate
 from mib.trading.risk.manager import RiskManager
 from mib.trading.risk.protocol import Gate
@@ -236,8 +237,8 @@ def get_risk_decision_repository() -> RiskDecisionRepository:
 
 def get_risk_manager() -> RiskManager:
     """FASE 8.3+ orchestrator. Gates registered in priority order
-    (cheapest reject first). Future sub-commits append more gates
-    behind the kill switch + DD pair.
+    (cheapest reject first). Each FASE 8.4 sub-commit appends the
+    next gate behind the kill switch + DD pair.
     """
     global _risk_manager  # noqa: PLW0603
     if _risk_manager is None:
@@ -245,6 +246,9 @@ def get_risk_manager() -> RiskManager:
         gates: list[Gate] = [
             KillSwitchGate(state),
             DailyDrawdownGate(state, async_session_factory),
+            ExposurePerTickerGate(
+                get_signal_repository(), get_risk_decision_repository()
+            ),
         ]
         _risk_manager = RiskManager(gates=gates)
     return _risk_manager
