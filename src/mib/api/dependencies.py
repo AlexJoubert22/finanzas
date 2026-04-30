@@ -29,6 +29,9 @@ from mib.sources.fred import FREDSource
 from mib.sources.rss import RSSSource
 from mib.sources.tradingview_ta import TradingViewTASource
 from mib.sources.yfinance_source import YFinanceSource
+from mib.trading.alerter import NullAlerter, TelegramAlerter, TelegramBotAlerter
+from mib.trading.executor import OrderExecutor
+from mib.trading.fill_detector import FillDetector
 from mib.trading.order_repo import OrderRepository
 from mib.trading.portfolio import PortfolioState
 from mib.trading.reconcile import Reconciler
@@ -45,7 +48,9 @@ from mib.trading.risk.repo import RiskDecisionRepository
 from mib.trading.risk.state import TradingStateService
 from mib.trading.signal_repo import SignalRepository
 from mib.trading.sizing import PositionSizer
+from mib.trading.stop_placer import NativeStopPlacer
 from mib.trading.strategy import StrategyEngine
+from mib.trading.trade_repo import TradeRepository
 
 _ccxt: CCXTReader | None = None
 _yf: YFinanceSource | None = None
@@ -71,7 +76,9 @@ _trading_state_service: TradingStateService | None = None
 _risk_decision_repo: RiskDecisionRepository | None = None
 _risk_manager: RiskManager | None = None
 _order_repo: OrderRepository | None = None
+_trade_repo: TradeRepository | None = None
 _reconciler: Reconciler | None = None
+_executor: OrderExecutor | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -237,6 +244,53 @@ def get_ccxt_trader() -> CCXTTrader:
             order_repo=get_order_repository(),
         )
     return _ccxt_trader
+
+
+def get_trade_repository() -> TradeRepository:
+    """FASE 9.4+ persistence boundary for the ``trades`` table."""
+    global _trade_repo  # noqa: PLW0603
+    if _trade_repo is None:
+        _trade_repo = TradeRepository(async_session_factory)
+    return _trade_repo
+
+
+def get_alerter() -> TelegramAlerter:
+    """Best-effort Telegram alerter wired to the running bot if any.
+
+    Returns a :class:`NullAlerter` when the bot isn't running so the
+    executor / reconciler still work in API-only mode.
+    """
+    from mib.telegram.bot import get_bot_app  # noqa: PLC0415
+
+    bot_app = get_bot_app()
+    if bot_app is None:
+        return NullAlerter()
+    return TelegramBotAlerter(bot_app)
+
+
+def get_order_executor() -> OrderExecutor:
+    """FASE 9.6+ end-to-end executor singleton.
+
+    Lazily resolves the alerter at first call so the bot has had time
+    to start up; subsequent calls reuse the same instance.
+    """
+    global _executor  # noqa: PLW0603
+    if _executor is None:
+        trader = get_ccxt_trader()
+        order_repo = get_order_repository()
+        alerter = get_alerter()
+        _executor = OrderExecutor(
+            trader=trader,
+            order_repo=order_repo,
+            trade_repo=get_trade_repository(),
+            fill_detector=FillDetector(trader, order_repo),
+            stop_placer=NativeStopPlacer(trader, order_repo, alerter),
+            alerter=alerter,
+            exchange_id=(
+                "binance_sandbox" if trader.is_sandbox else "binance"
+            ),
+        )
+    return _executor
 
 
 def get_reconciler() -> Reconciler:

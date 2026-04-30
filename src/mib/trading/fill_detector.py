@@ -57,7 +57,9 @@ class FillDetector:
         self._timeout = timeout_seconds
         self._poll_interval = poll_interval_seconds
 
-    async def wait_for_fill(self, order_db_id: int) -> FillResult:
+    async def wait_for_fill(
+        self, order_db_id: int, *, symbol: str | None = None
+    ) -> FillResult:
         """Block until the order is filled, terminal, or timeout.
 
         On every poll, refreshes the order in DB by calling
@@ -68,6 +70,10 @@ class FillDetector:
         ``filled`` field. Spot orders typically fill atomically;
         partial fills come through with ``status='partially_filled'``
         until the final ``filled`` event.
+
+        ``symbol`` is required by Binance's ``fetch_order`` endpoint;
+        the executor (FASE 9.6) passes it explicitly. Older callers
+        that omit it fall back to the (deprecated) payload sniff.
         """
         local = await self._order_repo.get(order_db_id)
         if local is None:
@@ -88,14 +94,14 @@ class FillDetector:
             )
 
         deadline = datetime.now(UTC).timestamp() + self._timeout
-        symbol = self._symbol_from_payload(local)
+        effective_symbol = symbol if symbol is not None else self._symbol_from_payload(local)
         last_status: OrderStatus = local.status
 
         while datetime.now(UTC).timestamp() < deadline:
             await asyncio.sleep(self._poll_interval)
             try:
                 response = await self._trader.fetch_order(
-                    symbol,
+                    effective_symbol,
                     exchange_order_id=local.exchange_order_id,
                     client_order_id=local.client_order_id,
                 )

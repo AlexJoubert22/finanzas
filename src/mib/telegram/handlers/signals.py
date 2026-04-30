@@ -27,11 +27,13 @@ from telegram import InlineKeyboardMarkup, Message, Update
 from telegram.ext import ContextTypes
 
 from mib.api.dependencies import (
+    get_order_executor,
     get_portfolio_state,
     get_risk_decision_repository,
     get_risk_manager,
     get_signal_repository,
 )
+from mib.config import get_settings
 from mib.indicators.charting import candles_dataframe, render_candles_png
 from mib.logger import logger
 from mib.services.market import MarketService
@@ -40,6 +42,7 @@ from mib.telegram.formatters import (
     fmt_pending_signals_list,
     fmt_signal_card,
 )
+from mib.trading.mode import TradingMode
 from mib.trading.notify import scanner_to_signals_job
 from mib.trading.risk.decision import RiskDecision
 from mib.trading.signal_repo import StaleSignalStateError
@@ -247,10 +250,56 @@ async def _consume_signal(update: Update, signal_id: int) -> None:
     body += (
         f"\n\n✅ <b>Aprobada</b> — sized "
         f"<code>{esc(decision.sized_amount)} EUR</code> "
-        f"(decision v{decision.version}). Pendiente de ejecución (FASE 9)."
+        f"(decision v{decision.version})."
     )
+    # FASE 9.6: spawn the executor in the background when the bot is
+    # in SEMI_AUTO / LIVE mode AND the master switch is on. SHADOW /
+    # PAPER / OFF stop here — no exchange call.
+    settings = get_settings()
+    will_execute = (
+        settings.trading_enabled
+        and settings.trading_mode in (TradingMode.SEMI_AUTO, TradingMode.LIVE)
+    )
+    if will_execute:
+        body += "\n\n<i>Ejecutando en exchange…</i>"
+        import asyncio  # noqa: PLC0415
+
+        asyncio.create_task(
+            _run_executor_in_background(updated.signal, decision)
+        )
+    else:
+        body += "\n\n<i>Modo no ejecutivo — orden no enviada.</i>"
     await query.edit_message_text(
         body, parse_mode="HTML", reply_markup=_terminal_keyboard()
+    )
+
+
+async def _run_executor_in_background(
+    signal: object, decision: RiskDecision
+) -> None:
+    """Run the FASE 9.6 :class:`OrderExecutor` and log the outcome.
+
+    Errors are swallowed because the executor is fire-and-forget from
+    the operator's perspective; the alerter (Telegram) notifies on
+    open / fail. Logged at INFO so transient ops can still trace it.
+    """
+    from mib.trading.signals import Signal as _Signal  # noqa: PLC0415
+
+    if not isinstance(signal, _Signal):  # pragma: no cover — defensive
+        logger.warning("executor: invalid signal type {!r}", type(signal))
+        return
+    executor = get_order_executor()
+    try:
+        result = await executor.execute(decision, signal)
+    except Exception as exc:  # noqa: BLE001
+        logger.error("executor: background run crashed: {}", exc)
+        return
+    logger.info(
+        "executor: signal_id={} status={} trade_id={} reason={}",
+        decision.signal_id,
+        result.status,
+        result.trade_id,
+        result.reason,
     )
 
 
