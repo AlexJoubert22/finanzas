@@ -138,6 +138,7 @@ module = [
   "mib.trading.risk.correlation_groups",
   "mib.trading.sizing",
   "mib.trading.orders",
+  "mib.trading.trades",
 ]
 strict = true
 

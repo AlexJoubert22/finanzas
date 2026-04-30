@@ -258,6 +258,93 @@ class SignalStatusEvent(Base):
     )
 
 
+# ─── Trades (append-only, FASE 9.4) ──────────────────────────────────
+class TradeRow(Base):
+    """The position-level lifecycle: pending → open → closed | failed.
+
+    One trade per signal (UNIQUE on signal_id). Joins to ``orders`` via
+    the FK that FASE 9.4's migration adds to ``orders.trade_id``.
+
+    ``realized_pnl_quote`` is populated on close (entry_price × size
+    minus exit_price × size, with sign per side, minus fees).
+    ``fees_paid_quote`` accumulates as fills come in.
+    """
+
+    __tablename__ = "trades"
+    __table_args__ = (
+        UniqueConstraint("signal_id", name="uq_trades_signal_id"),
+        Index("ix_trades_status_opened_at", "status", "opened_at"),
+        Index(
+            "ix_trades_closed_at",
+            "closed_at",
+            sqlite_where=Column("closed_at").is_not(None),  # type: ignore[arg-type]
+        ),
+        CheckConstraint("side IN ('long', 'short')", name="ck_trades_side"),
+        CheckConstraint(
+            "status IN ('pending', 'open', 'closed', 'failed')",
+            name="ck_trades_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    signal_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("signals.id"), nullable=False
+    )
+    ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    size: Mapped[Decimal] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=False
+    )
+    entry_price: Mapped[Decimal] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=False
+    )
+    exit_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=True
+    )
+    stop_loss_price: Mapped[Decimal] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=False
+    )
+    take_profit_price: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=True
+    )
+    opened_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    realized_pnl_quote: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=True
+    )
+    fees_paid_quote: Mapped[Decimal] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=False, default=Decimal(0)
+    )
+    exchange_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
+class TradeStatusEvent(Base):
+    """Append-only event log for :class:`TradeRow.status` transitions."""
+
+    __tablename__ = "trade_status_events"
+    __table_args__ = (
+        Index("ix_trade_status_events_trade_id", "trade_id"),
+        Index("ix_trade_status_events_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    trade_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("trades.id"), nullable=False
+    )
+    from_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    to_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    # created | opened | closed | failed | reconciled
+    event_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    actor: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+
 # ─── Orders (append-only, FASE 9.2) ──────────────────────────────────
 class OrderRow(Base):
     """Persisted order placed (or attempted) on an exchange.
