@@ -17,9 +17,12 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from mib.api.dependencies import get_mode_service, get_trading_state_service
+from mib.db.session import async_session_factory
 from mib.logger import logger
 from mib.telegram.formatters import esc
 from mib.trading.mode import TradingMode
+from mib.trading.mode_status import build_mode_status, format_mode_status_html
+from mib.trading.mode_transitions_repo import ModeTransitionRepository
 
 _VALID_NAMES: tuple[str, ...] = tuple(m.value for m in TradingMode)
 
@@ -87,6 +90,35 @@ async def mode_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             else "<i>(audit log activates en FASE 10.2)</i>"
         )
     )
+
+
+async def mode_status_cmd(
+    update: Update, _context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """``/mode_status`` — current mode + projection of the next allowed mode.
+
+    Reads ``mode_transitions`` for the audit context and computes the
+    gate progress (days_in_mode / closed_trades / clean_streak) so
+    the operator sees exactly what's left before climbing the ladder.
+    """
+    if update.message is None:
+        return
+    service = get_mode_service()
+    repo = ModeTransitionRepository(async_session_factory)
+    try:
+        current = await service.get_current()
+        status = await build_mode_status(
+            current=current,
+            transitions_repo=repo,
+            session_factory=async_session_factory,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.error("/mode_status failed: {}", exc)
+        await update.message.reply_html(
+            f"❌ <b>/mode_status falló:</b> {esc(str(exc))}"
+        )
+        return
+    await update.message.reply_html(format_mode_status_html(status))
 
 
 async def _show_current(update: Update) -> None:
