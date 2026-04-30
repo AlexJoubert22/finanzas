@@ -32,6 +32,7 @@ from mib.sources.yfinance_source import YFinanceSource
 from mib.trading.alerter import NullAlerter, TelegramAlerter, TelegramBotAlerter
 from mib.trading.executor import OrderExecutor
 from mib.trading.fill_detector import FillDetector
+from mib.trading.mode_service import ModeService
 from mib.trading.order_repo import OrderRepository
 from mib.trading.portfolio import PortfolioState
 from mib.trading.reconcile import Reconciler
@@ -79,6 +80,7 @@ _order_repo: OrderRepository | None = None
 _trade_repo: TradeRepository | None = None
 _reconciler: Reconciler | None = None
 _executor: OrderExecutor | None = None
+_mode_service: ModeService | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -244,6 +246,26 @@ def get_ccxt_trader() -> CCXTTrader:
             order_repo=get_order_repository(),
         )
     return _ccxt_trader
+
+
+def get_mode_service() -> ModeService:
+    """FASE 10+ trading mode reader/transitioner.
+
+    Backed by the ``trading_state`` singleton (cache) plus
+    :class:`ModeTransitionRepository` for the append-only audit log.
+    """
+    global _mode_service  # noqa: PLW0603
+    if _mode_service is None:
+        from mib.trading.mode_transitions_repo import (  # noqa: PLC0415
+            ModeTransitionRepository,
+        )
+
+        _mode_service = ModeService(
+            session_factory=async_session_factory,
+            state_service=get_trading_state_service(),
+            transitions_repo=ModeTransitionRepository(async_session_factory),
+        )
+    return _mode_service
 
 
 def get_trade_repository() -> TradeRepository:

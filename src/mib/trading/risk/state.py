@@ -26,12 +26,13 @@ class TradingStateSnapshot:
     daily_dd_max_pct: float
     total_dd_max_pct: float
     killed_until: datetime | None
+    mode: str
     last_modified_at: datetime
     last_modified_by: str
 
 
 _ALLOWED_KEYS: frozenset[str] = frozenset(
-    {"enabled", "daily_dd_max_pct", "total_dd_max_pct", "killed_until"}
+    {"enabled", "daily_dd_max_pct", "total_dd_max_pct", "killed_until", "mode"}
 )
 
 
@@ -100,6 +101,7 @@ def _to_snapshot(row: TradingState) -> TradingStateSnapshot:
         daily_dd_max_pct=row.daily_dd_max_pct,
         total_dd_max_pct=row.total_dd_max_pct,
         killed_until=row.killed_until,
+        mode=row.mode,
         last_modified_at=row.last_modified_at,
         last_modified_by=row.last_modified_by,
     )
