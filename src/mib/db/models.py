@@ -15,6 +15,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Column,
     DateTime,
     Float,
     ForeignKey,
@@ -249,6 +250,100 @@ class SignalStatusEvent(Base):
     # One of: created | approved | cancelled | expired | consumed | reconciled
     event_type: Mapped[str] = mapped_column(String(16), nullable=False)
     # user:<telegram_id> | job:<job_name> | system
+    actor: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+
+# ─── Orders (append-only, FASE 9.2) ──────────────────────────────────
+class OrderRow(Base):
+    """Persisted order placed (or attempted) on an exchange.
+
+    The status column is the denormalised cache of the latest event in
+    :class:`OrderStatusEvent`. Mutations go through
+    :class:`mib.trading.order_repo.OrderRepository` which writes the
+    audit row and updates the cache atomically.
+
+    ``client_order_id`` is the idempotency key: the executor generates
+    a deterministic id per signal+params combination so a retry hits
+    the UNIQUE constraint and short-circuits to the existing row.
+    ``trade_id`` is nullable until FASE 9.4 backpopulates it once the
+    matching :class:`TradeRow` exists.
+    """
+
+    __tablename__ = "orders"
+    __table_args__ = (
+        UniqueConstraint("client_order_id", name="uq_orders_client_order_id"),
+        Index("ix_orders_signal_id_created_at", "signal_id", "created_at"),
+        Index(
+            "ix_orders_exchange_order_id",
+            "exchange_order_id",
+            sqlite_where=Column("exchange_order_id").is_not(None),  # type: ignore[arg-type]
+        ),
+        CheckConstraint(
+            "type IN ('limit', 'market', 'stop_market', 'stop_limit')",
+            name="ck_orders_type",
+        ),
+        CheckConstraint("side IN ('buy', 'sell')", name="ck_orders_side"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    # NOTE: trade_id is plain Integer here; the FK to trades(id) is
+    # added in FASE 9.4's migration once the trades table exists.
+    # Backpopulated by ``link_orders_to_trade`` when the matching
+    # trade transitions pending → open.
+    trade_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    signal_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("signals.id"), nullable=False
+    )
+    client_order_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    exchange_order_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+    exchange_id: Mapped[str] = mapped_column(String(32), nullable=False)
+    type: Mapped[str] = mapped_column(String(16), nullable=False)
+    side: Mapped[str] = mapped_column(String(8), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    price: Mapped[Decimal | None] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=True
+    )
+    amount: Mapped[Decimal] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=False
+    )
+    reduce_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    raw_payload_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    raw_response_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    filled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class OrderStatusEvent(Base):
+    """Append-only event log for :class:`OrderRow.status` transitions."""
+
+    __tablename__ = "order_status_events"
+    __table_args__ = (
+        Index("ix_order_status_events_order_id", "order_id"),
+        Index("ix_order_status_events_created_at", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    order_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("orders.id"), nullable=False
+    )
+    from_status: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    to_status: Mapped[str] = mapped_column(String(24), nullable=False)
+    # created | submitted | partially_filled | filled | cancelled | rejected | failed | reconciled
+    event_type: Mapped[str] = mapped_column(String(24), nullable=False)
     actor: Mapped[str] = mapped_column(String(64), nullable=False)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

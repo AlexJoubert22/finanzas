@@ -32,11 +32,22 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import uuid4
 
 from mib.config import get_settings
 from mib.logger import logger
+from mib.trading.orders import (
+    OrderInputs,
+    OrderResult,
+    OrderSide,
+    OrderStatus,
+    OrderType,
+)
+
+if TYPE_CHECKING:  # pragma: no cover
+    from mib.trading.order_repo import OrderRepository
 
 #: Bound for ``is_available()`` — the operator wants a quick yes/no
 #: at boot, not a 30-second hang if testnet is sluggish.
@@ -56,6 +67,7 @@ class CCXTTrader:
         api_secret: str = "",
         base_url: str = "",
         dry_run: bool = True,
+        order_repo: OrderRepository | None = None,
     ) -> None:
         self._exchange_id = exchange_id
         self._api_key = api_key
@@ -64,6 +76,17 @@ class CCXTTrader:
         self._dry_run = dry_run
         self._is_sandbox = _detect_sandbox(base_url)
         self._exchange: Any = None  # lazy
+        # Optional in tests that exercise the seatbelt without persisting.
+        self._order_repo: OrderRepository | None = order_repo
+
+    @property
+    def _exchange_label(self) -> str:
+        """Stable string used as ``orders.exchange_id`` column value.
+
+        Distinguishes ``binance`` (production) from ``binance_sandbox``
+        so reconciliation queries can filter cleanly.
+        """
+        return f"{self._exchange_id}_sandbox" if self._is_sandbox else self._exchange_id
 
     @property
     def is_sandbox(self) -> bool:
@@ -186,32 +209,154 @@ class CCXTTrader:
 
     async def create_order(
         self,
-        symbol: str,
-        side: str,
-        type: str,  # noqa: A002 — matches ccxt parameter name
-        amount: float,
         *,
-        price: float | None = None,
-        client_order_id: str | None = None,
-        params: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Place an order. Triple seatbelt blocks any unsafe configuration."""
-        payload: dict[str, Any] = {
+        signal_id: int,
+        symbol: str,
+        side: OrderSide,
+        type: OrderType,  # noqa: A002 — matches ccxt parameter name
+        amount: Decimal,
+        price: Decimal | None = None,
+        reduce_only: bool = False,
+        extra_params: dict[str, Any] | None = None,
+    ) -> OrderResult:
+        """Place an order with idempotent client_order_id + audit trail.
+
+        Flow:
+
+        1. Persist an :class:`OrderRow` (status='created', 'created'
+           event written) with a deterministic ``client_order_id``
+           derived from (signal_id, symbol, side, type, amount, price,
+           reduce_only). Retries on the same params hit the UNIQUE
+           constraint and return the existing row.
+        2. Triple seatbelt check. If blocked, log + return
+           :class:`OrderResult` with ``status='created'`` and a clear
+           ``reason``. The exchange is never touched.
+        3. Otherwise call ``exchange.create_order(...)`` with the
+           Binance ``newClientOrderId`` param.
+        4. On success: ``transition('submitted')`` with
+           ``exchange_order_id`` populated.
+        5. On failure: ``transition('rejected')`` (4xx-shaped) or
+           ``transition('failed')`` (timeouts/network) with the
+           exception message captured in the audit row.
+        """
+        if self._order_repo is None:
+            raise RuntimeError(
+                "CCXTTrader.create_order requires an OrderRepository — "
+                "construct via api.dependencies.get_ccxt_trader()."
+            )
+
+        inputs = OrderInputs(
+            signal_id=signal_id,
+            symbol=symbol,
+            side=side,
+            type=type,
+            amount=amount,
+            price=price,
+            reduce_only=reduce_only,
+            extra_params=extra_params or {},
+        )
+        raw_payload: dict[str, Any] = {
             "symbol": symbol,
             "side": side,
             "type": type,
-            "amount": amount,
-            "price": price,
-            "clientOrderId": client_order_id,
-            "params": params or {},
+            "amount": str(amount),
+            "price": str(price) if price is not None else None,
+            "reduce_only": reduce_only,
+            "extra_params": extra_params or {},
         }
-        if self._gate_blocks_writes():
-            logger.info("ccxt-trader: gated, would execute: {}", payload)
-            return self._fake_order_response(payload)
-        # Real path lands in FASE 9.2 (next sub-commit).
-        raise NotImplementedError(
-            "CCXTTrader.create_order — real path wired in FASE 9.2"
+
+        existing = await self._order_repo.add_or_get(
+            inputs,
+            exchange_id=self._exchange_label,
+            raw_payload=raw_payload,
         )
+        # Idempotent return: if the existing row is past 'created',
+        # the previous attempt already submitted. Don't re-submit.
+        if existing.status != "created":
+            logger.info(
+                "ccxt-trader: idempotent return order_id={} status={}",
+                existing.order_id,
+                existing.status,
+            )
+            return existing
+
+        if self._gate_blocks_writes():
+            logger.info(
+                "ccxt-trader: triple seatbelt blocked write for order_id={}",
+                existing.order_id,
+            )
+            updated = await self._order_repo.transition(
+                existing.order_id,
+                "cancelled",
+                actor="ccxt-trader:gate",
+                event_type="cancelled",
+                reason="triple-seatbelt blocked write (dry-run / trading_enabled / sandbox)",
+                expected_from_status="created",
+            )
+            assert updated is not None
+            return _result_with_reason(
+                updated, "blocked by triple seatbelt"
+            )
+
+        # Real path: send to exchange.
+        exchange = await self._ensure_exchange()
+        ccxt_params: dict[str, Any] = dict(extra_params or {})
+        ccxt_params["newClientOrderId"] = existing.client_order_id
+        if reduce_only:
+            ccxt_params["reduceOnly"] = True
+
+        try:
+            response: dict[str, Any] = await exchange.create_order(
+                symbol,
+                type,
+                side,
+                float(amount),
+                float(price) if price is not None else None,
+                ccxt_params,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # ``exc.__class__`` rather than ``type(exc)`` because the
+            # local parameter ``type`` shadows the builtin and would
+            # confuse static analysis.
+            error_class = exc.__class__.__name__
+            logger.warning(
+                "ccxt-trader: exchange create_order failed order_id={} {}: {}",
+                existing.order_id,
+                error_class,
+                exc,
+            )
+            terminal_status = _classify_failure(error_class)
+            updated = await self._order_repo.transition(
+                existing.order_id,
+                terminal_status,
+                actor="ccxt-trader:exchange",
+                event_type=terminal_status,
+                reason=f"{error_class}: {exc}",
+                expected_from_status="created",
+                raw_response={"error": error_class, "message": str(exc)},
+            )
+            assert updated is not None
+            return _result_with_reason(updated, f"{error_class}: {exc}")
+
+        exchange_order_id = str(response.get("id") or "") or None
+        updated = await self._order_repo.transition(
+            existing.order_id,
+            "submitted",
+            actor="ccxt-trader:exchange",
+            event_type="submitted",
+            reason=None,
+            expected_from_status="created",
+            exchange_order_id=exchange_order_id,
+            raw_response=response,
+        )
+        assert updated is not None
+        logger.info(
+            "ccxt-trader: submitted order_id={} exchange_id={} client_id={}",
+            updated.order_id,
+            updated.exchange_order_id,
+            updated.client_order_id,
+        )
+        return updated
 
     async def cancel_order(
         self,
@@ -317,6 +462,23 @@ class CCXTTrader:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("ccxt-trader close failed: {}", exc)
             self._exchange = None
+
+
+def _result_with_reason(result: OrderResult, reason: str) -> OrderResult:
+    """Return ``result`` with ``reason`` populated (frozen dataclass)."""
+    from dataclasses import replace  # noqa: PLC0415
+
+    return replace(result, reason=reason)
+
+
+def _classify_failure(exception_class_name: str) -> OrderStatus:
+    """Bucket exchange errors into ``rejected`` (4xx) vs ``failed``
+    (network/timeout). Used by the audit trail.
+    """
+    name = exception_class_name.lower()
+    if "timeout" in name or "network" in name or "connection" in name:
+        return "failed"
+    return "rejected"
 
 
 def _detect_sandbox(base_url: str) -> bool:

@@ -99,20 +99,26 @@ def test_triple_seatbelt_truth_table(
 
 
 @pytest.mark.asyncio
-async def test_only_open_seatbelt_combination_attempts_real_call(
+async def test_create_order_without_repo_raises_clear_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When all three are open, ``create_order`` no longer returns the
-    fake response — it tries the real path (which raises
-    NotImplementedError in 9.1, real wiring lands in 9.2).
+    """Raw CCXTTrader (no OrderRepository) must refuse create_order
+    with a guidance error pointing at ``get_ccxt_trader()`` — the
+    repo is required by FASE 9.2 so every call lands an audit row.
     """
+    from decimal import Decimal  # noqa: PLC0415
+
     settings = get_settings()
     monkeypatch.setattr(settings, "trading_enabled", True, raising=False)
-    t = _make_trader(dry_run=False, is_sandbox=True)
-    with pytest.raises(NotImplementedError, match="9.2"):
+    t = _make_trader(dry_run=False, is_sandbox=True)  # no repo
+    with pytest.raises(RuntimeError, match="OrderRepository"):
         await t.create_order(
-            "BTC/USDT", side="buy", type="limit", amount=0.001,
-            price=60_000, client_order_id="mib-test-1",
+            signal_id=1,
+            symbol="BTC/USDT",
+            side="buy",
+            type="limit",
+            amount=Decimal("0.001"),
+            price=Decimal(60_000),
         )
 
 

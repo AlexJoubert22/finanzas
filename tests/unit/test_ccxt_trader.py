@@ -1,66 +1,27 @@
-"""Contract tests for the CCXTTrader skeleton.
+"""Contract tests for the CCXTTrader skeleton paths.
 
-The skeleton is intentionally non-functional until FASE 9; the only
-behaviour that matters today is the **double seatbelt** that prevents
-any write from ever reaching a real exchange:
-
-1. ``dry_run=True`` (constructor default)         → blocks.
-2. ``trading_enabled=False`` in settings (default) → blocks.
-
-Either being False is enough; both must flip to True for a write to
-proceed (and even then the body raises NotImplementedError — that
-gets filled in during FASE 9).
+FASE 9.1 introduced the triple seatbelt and made ``is_available``
+async. FASE 9.2 made ``create_order`` keyword-only with a Decimal
+amount/price and required an injected :class:`OrderRepository`.
+Sandbox-aware behaviour lives in ``test_ccxt_trader_sandbox.py``;
+this file keeps the small surface that is still meaningful for the
+no-credentials skeleton path.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from mib.config import get_settings
 from mib.sources.ccxt_trader import CCXTTrader
 
 
 @pytest.mark.asyncio
 async def test_trader_unavailable_without_credentials() -> None:
     """Without API key/secret, ``is_available()`` returns False without
-    attempting any network call. Refactored from FASE 8.0 contract:
-    the method is now async (FASE 9.1) and does a real ping when
-    credentials are present — see ``test_ccxt_trader_sandbox.py``.
+    attempting any network call.
     """
     t = CCXTTrader()
     assert await t.is_available() is False
-
-
-@pytest.mark.asyncio
-async def test_create_order_dry_run_returns_fake_response() -> None:
-    t = CCXTTrader(dry_run=True)
-    resp = await t.create_order(
-        "BTC/USDT",
-        side="buy",
-        type="limit",
-        amount=0.01,
-        price=60_000.0,
-        client_order_id="mib-test-1",
-    )
-    assert resp["status"] == "dry-run"
-    assert resp["clientOrderId"] == "mib-test-1"
-    assert resp["symbol"] == "BTC/USDT"
-    assert resp["filled"] == 0.0
-    assert resp["info"]["dry_run"] is True
-
-
-@pytest.mark.asyncio
-async def test_second_seatbelt_holds_when_dry_run_false_but_trading_disabled() -> None:
-    """Even if a future bug builds a trader with dry_run=False, the
-    master kill switch must still block. trading_enabled defaults to
-    False — proving the gate stays closed without us touching settings.
-    """
-    assert get_settings().trading_enabled is False
-    t = CCXTTrader(dry_run=False)
-    resp = await t.create_order(
-        "ETH/USDT", side="sell", type="market", amount=1.0, client_order_id="mib-test-2"
-    )
-    assert resp["status"] == "dry-run"
 
 
 @pytest.mark.asyncio
