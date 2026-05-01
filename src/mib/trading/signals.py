@@ -37,12 +37,15 @@ Side = Literal["long", "short", "flat"]
 # matching trade, "cancelled" when discarded, "expired" when the entry
 # zone is no longer reachable. The DB enforces the same set via a
 # check constraint.
-SignalStatus = Literal["pending", "expired", "consumed", "cancelled"]
+SignalStatus = Literal[
+    "pending", "expired", "consumed", "cancelled", "ai_rejected"
+]
 SIGNAL_STATUSES: tuple[SignalStatus, ...] = (
     "pending",
     "expired",
     "consumed",
     "cancelled",
+    "ai_rejected",
 )
 
 # Strategy ids must be namespaced + versioned so historical signals

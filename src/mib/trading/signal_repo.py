@@ -257,6 +257,30 @@ class SignalRepository:
             row = await session.get(SignalRow, signal_id)
             return _from_row(row) if row is not None else None
 
+    async def set_ai_confidence(
+        self, signal_id: int, confidence: float
+    ) -> bool:
+        """Backpopulate ``signals.confidence_ai`` after the AI Validator
+        runs (FASE 11.6).
+
+        This is a structural metadata write — NOT a status transition.
+        No event row is emitted. Direct UPDATE is allowed here only
+        because confidence_ai is set-once data the validator owns;
+        all status mutations still flow through ``transition``.
+
+        Returns True iff a row was matched and updated.
+        """
+        if not 0.0 <= confidence <= 1.0:
+            raise ValueError(
+                f"confidence_ai must be in [0, 1] (got {confidence})"
+            )
+        async with self._sf() as session, session.begin():
+            row = await session.get(SignalRow, signal_id)
+            if row is None:
+                return False
+            row.confidence_ai = float(confidence)
+        return True
+
     async def list_pending(self, *, limit: int = 100) -> list[PersistedSignal]:
         async with self._sf() as session:
             stmt = (

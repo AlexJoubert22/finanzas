@@ -9,6 +9,7 @@ spawn duplicate jobs if app factory is called twice in tests.
 from __future__ import annotations
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from mib.api.dependencies import (
@@ -110,6 +111,29 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
 
+    # FASE 11.3 — News Reactor: propose reduce/close/hold every 5 min.
+    # Proposal-only — never executes. Operator decides via Telegram.
+    from mib.trading.jobs.news_reactor_job import news_reactor_job  # noqa: PLC0415
+
+    sched.add_job(
+        news_reactor_job,
+        trigger=IntervalTrigger(minutes=5),
+        id="news_reactor",
+        name="News reactor (proposals only)",
+        replace_existing=True,
+    )
+
+    # FASE 11.4 — Daily postmortem batch at 02:00 UTC.
+    from mib.trading.jobs.postmortem_job import postmortem_job  # noqa: PLC0415
+
+    sched.add_job(
+        postmortem_job,
+        trigger=CronTrigger(hour=2, minute=0, timezone="UTC"),
+        id="daily_postmortem",
+        name="Daily postmortem batch (02:00 UTC)",
+        replace_existing=True,
+    )
+
     sched.start()
     # Fire once ASAP to populate the cache; fire-and-forget.
     import asyncio
@@ -118,7 +142,7 @@ def start_scheduler() -> None:
     asyncio.create_task(portfolio_sync_job())
     logger.info(
         "scheduler: started with health probe (5min) + expire_stale_signals (15min) "
-        "+ portfolio_sync (30s) + reconcile (5min)"
+        "+ portfolio_sync (30s) + reconcile (5min) + news_reactor (5min)"
     )
 
 

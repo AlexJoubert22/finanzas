@@ -33,8 +33,10 @@ from mib.trading.alerter import NullAlerter, TelegramAlerter, TelegramBotAlerter
 from mib.trading.executor import OrderExecutor
 from mib.trading.fill_detector import FillDetector
 from mib.trading.mode_service import ModeService
+from mib.trading.news_reactor import NewsReactor
 from mib.trading.order_repo import OrderRepository
 from mib.trading.portfolio import PortfolioState
+from mib.trading.postmortem import DailyPostmortemRunner
 from mib.trading.reconcile import Reconciler
 from mib.trading.risk.correlation_groups import CorrelationGroups
 from mib.trading.risk.gates.correlation_group import CorrelationGroupGate
@@ -81,6 +83,8 @@ _trade_repo: TradeRepository | None = None
 _reconciler: Reconciler | None = None
 _executor: OrderExecutor | None = None
 _mode_service: ModeService | None = None
+_news_reactor: NewsReactor | None = None
+_postmortem_runner: DailyPostmortemRunner | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -332,6 +336,34 @@ def get_reconciler() -> Reconciler:
     return _reconciler
 
 
+def get_postmortem_runner() -> DailyPostmortemRunner:
+    """FASE 11.4+ daily postmortem batch runner."""
+    global _postmortem_runner  # noqa: PLW0603
+    if _postmortem_runner is None:
+        _postmortem_runner = DailyPostmortemRunner(
+            ai_router=get_ai_router(),
+            session_factory=async_session_factory,
+        )
+    return _postmortem_runner
+
+
+def get_news_reactor() -> NewsReactor:
+    """FASE 11.3+ news reactor — proposes reduce/close/hold on positions.
+
+    Never auto-executes; only persists proposals + alerts the admin.
+    """
+    global _news_reactor  # noqa: PLW0603
+    if _news_reactor is None:
+        _news_reactor = NewsReactor(
+            ai_router=get_ai_router(),
+            news_service=get_news_service(),
+            trade_repo=get_trade_repository(),
+            session_factory=async_session_factory,
+            alerter=get_alerter(),
+        )
+    return _news_reactor
+
+
 def get_portfolio_state() -> PortfolioState:
     """FASE 8.2+ portfolio cache, refreshed by `portfolio_sync_job`."""
     global _portfolio_state  # noqa: PLW0603
@@ -367,9 +399,13 @@ def get_risk_manager() -> RiskManager:
     """FASE 8.3+ orchestrator. Gates registered in priority order
     (cheapest reject first). Each FASE 8.4 sub-commit appends the
     next gate behind the kill switch + DD pair.
+
+    FASE 11.6: when ``settings.risk_use_ai_confidence`` is True, the
+    chain also includes :class:`MinAIConfidenceGate` (off by default).
     """
     global _risk_manager  # noqa: PLW0603
     if _risk_manager is None:
+        s = get_settings()
         state = get_trading_state_service()
         signals_repo = get_signal_repository()
         decisions_repo = get_risk_decision_repository()
@@ -383,6 +419,15 @@ def get_risk_manager() -> RiskManager:
             MaxConcurrentTradesGate(signals_repo),
             SignalsPerHourRateLimitGate(async_session_factory),
         ]
+        if s.risk_use_ai_confidence:
+            from mib.trading.risk.gates.min_ai_confidence import (  # noqa: PLC0415
+                MinAIConfidenceGate,
+            )
+            gates.append(
+                MinAIConfidenceGate(
+                    threshold=s.min_ai_confidence_threshold
+                )
+            )
         _risk_manager = RiskManager(gates=gates, sizer=PositionSizer())
     return _risk_manager
 

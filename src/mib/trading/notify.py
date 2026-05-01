@@ -27,17 +27,32 @@ from typing import TYPE_CHECKING
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from mib.ai.models import TaskType
 from mib.api.dependencies import (
+    get_ai_router,
+    get_news_service,
     get_portfolio_state,
     get_risk_decision_repository,
     get_risk_manager,
     get_signal_repository,
     get_strategy_engine,
 )
+from mib.db.session import async_session_factory
 from mib.logger import logger
 from mib.services.scanner import PresetName
 from mib.telegram.formatters import fmt_signal_with_decision
+from mib.trading.ai_validations_repo import (
+    AIValidationRepository,
+    derive_request_hash,
+)
+from mib.trading.ai_validator import (
+    AIValidationResult,
+    TradeValidator,
+    apply_size_modifier,
+)
 from mib.trading.risk.decision import RiskDecision
+from mib.trading.signal_repo import SignalRepository
+from mib.trading.signals import Signal as SignalDC
 
 if TYPE_CHECKING:
     from mib.telegram import BotApp
@@ -95,6 +110,9 @@ async def scanner_to_signals_job(
         )
         return 0
 
+    validator = TradeValidator(get_ai_router())
+    ai_validations_repo = AIValidationRepository(async_session_factory)
+
     persisted_count = 0
     for sig in signals:
         try:
@@ -106,6 +124,44 @@ async def scanner_to_signals_job(
             continue
         persisted_count += 1
 
+        # ── AI Trade Validator (FASE 11.2 + 11.5) ─────────────────────
+        # Runs BEFORE RiskManager. If approve=False or confidence
+        # below floor, signal flips to 'ai_rejected' and we skip risk
+        # evaluation entirely. ai_validations row written either way.
+        validation: AIValidationResult | None = None
+        try:
+            validation = await _run_validator(validator, sig)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "scanner_to_signals: validator crashed for #{}: {} "
+                "(treating as ai_rejected)", persisted.id, exc,
+            )
+
+        if validation is not None:
+            await _persist_ai_validation(
+                ai_validations_repo, persisted.id, validation
+            )
+            # FASE 11.6: backpopulate confidence_ai on the signal row
+            # so MinAIConfidenceGate (and any analytics) can read it.
+            if validation.success:
+                try:
+                    await repo.set_ai_confidence(
+                        persisted.id,
+                        float(validation.confidence),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "ai_validator: set_ai_confidence failed for #{}: {}",
+                        persisted.id,
+                        exc,
+                    )
+
+        if validation is not None and not validation.approve:
+            await _mark_signal_ai_rejected(repo, persisted.id, validation)
+            # No risk evaluation, no Telegram approval card. Continue
+            # to the next signal without crashing.
+            continue
+
         # ── Risk evaluation (FASE 8.6) ──────────────────────────────
         decision: RiskDecision | None = None
         try:
@@ -115,6 +171,14 @@ async def scanner_to_signals_job(
             # re-stamp the decision via ``dataclasses.replace`` inside
             # the factory so the retry loop can adjust on race.
             initial = await risk_manager.evaluate(persisted, snapshot)
+
+            # Apply AI-issued size_modifier when the validator gave
+            # us a successful approval (FASE 11.2).
+            if validation is not None and validation.success:
+                modified_sized = apply_size_modifier(
+                    initial.sized_amount, validation.size_modifier
+                )
+                initial = replace(initial, sized_amount=modified_sized)
 
             def _factory(version: int, _d: RiskDecision = initial) -> RiskDecision:
                 return replace(_d, version=version)
@@ -159,3 +223,139 @@ async def scanner_to_signals_job(
         len(signals),
     )
     return persisted_count
+
+
+# ─── FASE 11.2 helpers ──────────────────────────────────────────────
+
+
+async def _run_validator(
+    validator: TradeValidator, signal: SignalDC
+) -> AIValidationResult:
+    """Build context strings and call the LLM validator.
+
+    Macro / news context lookups stay defensive: every external call
+    is wrapped so a downstream timeout never poisons the validation
+    decision (the validator itself returns success=False on router
+    failures, which the coordinator treats as ai_rejected).
+    """
+    macro_context = await _build_macro_context()
+    news_context = await _build_news_context(signal.ticker)
+    indicators_context = _format_indicators(signal.indicators)
+    return await validator.validate(
+        signal,
+        macro_context=macro_context,
+        news_context=news_context,
+        indicators_context=indicators_context,
+    )
+
+
+async def _build_macro_context() -> str:
+    """TODO FASE 28: pull from a real Macro snapshot service.
+
+    Until then we emit a stable placeholder so the prompt's "macro
+    context" slot still populates without inventing fake data.
+    """
+    return "(no macro snapshot available — placeholder until FASE 28)"
+
+
+async def _build_news_context(ticker: str) -> str:
+    """Last 3 news items for ``ticker`` with sentiment when available."""
+    try:
+        news = get_news_service()
+        response = await news.for_ticker(ticker, limit=3)
+        items = list(response.items)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug(
+            "ai_validator: news fetch failed for {}: {}", ticker, exc
+        )
+        return "(news fetch unavailable)"
+    if not items:
+        return f"(no recent news for {ticker})"
+    lines = []
+    for n in items[:3]:
+        title = getattr(n, "headline", "") or getattr(n, "title", "") or ""
+        sentiment = getattr(n, "sentiment", None)
+        published = getattr(n, "published_at", None)
+        sent_str = f" [{sentiment}]" if sentiment else ""
+        ts_str = f" ({published})" if published else ""
+        lines.append(f"- {title}{sent_str}{ts_str}")
+    return "\n".join(lines)
+
+
+def _format_indicators(indicators: dict[str, float]) -> str:
+    if not indicators:
+        return "(no indicators)"
+    return "\n".join(
+        f"- {key}: {value}" for key, value in sorted(indicators.items())
+    )
+
+
+async def _persist_ai_validation(
+    repo: AIValidationRepository,
+    signal_id: int,
+    validation: AIValidationResult,
+) -> None:
+    """Write an ``ai_validations`` row for the call. Errors swallowed
+    (validator path must never crash the coordinator).
+    """
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    try:
+        request_hash = derive_request_hash(
+            signal_id, validation.rationale_short or ""
+        )
+        await repo.add(
+            signal_id=signal_id,
+            task_type=TaskType.TRADE_VALIDATE,
+            result=validation,
+            request_hash=request_hash,
+            decided_at=datetime.now(UTC).replace(tzinfo=None),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "ai_validator: failed to persist ai_validations row for #{}: {}",
+            signal_id,
+            exc,
+        )
+
+
+async def _mark_signal_ai_rejected(
+    repo: SignalRepository, signal_id: int, validation: AIValidationResult
+) -> None:
+    """Transition the signal to ``status='ai_rejected'`` with audit
+    metadata. Errors are swallowed (the signal stays 'pending' on
+    failure; reconciler / operator can pick it up later).
+    """
+    try:
+        await repo.transition(
+            signal_id,
+            "ai_rejected",
+            actor="ai_validator",
+            event_type="ai_rejected",
+            reason=(validation.rationale_short or "ai_rejected")[:240],
+            metadata={
+                "approve": validation.approve,
+                "confidence": str(validation.confidence),
+                "concerns": list(validation.concerns),
+                "size_modifier": str(validation.size_modifier),
+                "provider_used": validation.provider_used,
+                "model_used": validation.model_used,
+                "warnings": list(validation.warnings),
+                "success": validation.success,
+            },
+            expected_from_status="pending",
+        )
+        logger.info(
+            "ai_validator: signal_id={} → ai_rejected (provider={}, "
+            "confidence={}, concerns={}, success={})",
+            signal_id,
+            validation.provider_used,
+            validation.confidence,
+            len(validation.concerns),
+            validation.success,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "ai_validator: failed to mark signal #{} ai_rejected: {}",
+            signal_id, exc,
+        )

@@ -187,7 +187,8 @@ class SignalRow(Base):
             "side IN ('long', 'short', 'flat')", name="ck_signals_side"
         ),
         CheckConstraint(
-            "status IN ('pending', 'expired', 'consumed', 'cancelled')",
+            "status IN ('pending', 'expired', 'consumed', "
+            "'cancelled', 'ai_rejected')",
             name="ck_signals_status",
         ),
     )
@@ -556,6 +557,151 @@ class RiskDecisionRow(Base):
         Numeric(precision=20, scale=8), nullable=True
     )
     reasoning: Mapped[str] = mapped_column(Text, nullable=False)
+    decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+# ─── News reactions (append-only, FASE 11.3) ─────────────────────────
+class NewsReactionRow(Base):
+    """Append-only log of news-reaction proposals.
+
+    The News Reactor runs every 5 min, picks news with strong sentiment
+    on tickers in open positions, and asks an LLM to propose
+    ``reduce | close | hold``. NEVER executes — only proposes via
+    Telegram. Each row is a new proposal; dedupe (no re-proposal in
+    30 min for the same news+ticker pair) is enforced by querying
+    this table on the ``(news_url_hash, ticker, decided_at)`` index.
+
+    ``news_url_hash`` is sha256 over the article URL or, when URL is
+    missing, sha256 over the headline. Avoids storing URLs of arbitrary
+    length on the index.
+    """
+
+    __tablename__ = "news_reactions"
+    __table_args__ = (
+        Index(
+            "ix_news_reactions_ticker_decided_at",
+            "ticker",
+            "decided_at",
+        ),
+        Index("ix_news_reactions_url_hash", "news_url_hash"),
+        CheckConstraint(
+            "decision IN ('reduce', 'close', 'hold')",
+            name="ck_news_reactions_decision",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    news_url_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    news_headline: Mapped[str] = mapped_column(String(512), nullable=False)
+    news_sentiment: Mapped[float | None] = mapped_column(Float, nullable=True)
+    ticker: Mapped[str] = mapped_column(String(32), nullable=False)
+    position_trade_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("trades.id"), nullable=True
+    )
+    decision: Mapped[str] = mapped_column(String(8), nullable=False)
+    justification: Mapped[str] = mapped_column(Text, nullable=False)
+    ai_provider_used: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
+    ai_model_used: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
+# ─── Daily postmortems (append-only, FASE 11.4) ──────────────────────
+class DailyPostmortemRow(Base):
+    """One row per UTC day's postmortem batch.
+
+    Born append-only: the nightly job inserts one row per ``date_utc``,
+    ``UNIQUE(date_utc)`` keeps re-runs idempotent. Old rows are never
+    edited; if the analysis needs to be re-issued we'd add a ``v``
+    suffix to ``date_utc`` (FASE 13+ if it ever happens).
+
+    ``trades_analyzed=0`` is preserved as a heartbeat: even a quiet
+    day produces a row so the operator can see the postmortem ran.
+    """
+
+    __tablename__ = "daily_postmortems"
+    __table_args__ = (
+        UniqueConstraint("date_utc", name="uq_daily_postmortems_date_utc"),
+        Index("ix_daily_postmortems_date_utc", "date_utc"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    date_utc: Mapped[str] = mapped_column(String(10), nullable=False)
+    """ISO date ``YYYY-MM-DD`` of the closing day in UTC."""
+    trades_analyzed: Mapped[int] = mapped_column(Integer, nullable=False)
+    aggregate_pnl_quote: Mapped[Decimal] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=False, default=Decimal(0)
+    )
+    patterns_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    outliers_json: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    suggestions_json: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    regime_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ai_provider_used: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
+    ai_model_used: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.current_timestamp(), nullable=False
+    )
+
+
+# ─── AI validations (append-only, FASE 11.5) ─────────────────────────
+class AIValidationRow(Base):
+    """Append-only log of every TRADE_VALIDATE LLM call.
+
+    Born append-only — no UPDATE/DELETE: each (signal_id, attempt) is
+    a new row. Indices match the hot queries:
+    - ``(signal_id, decided_at DESC)``: latest validation per signal.
+    - ``(provider_used, decided_at DESC)``: per-provider latency /
+      success-rate diagnostics.
+
+    ``request_hash`` is sha256[:16] over (signal_id + prompt seed) so
+    re-run dedup is possible without storing the full prompt twice.
+    """
+
+    __tablename__ = "ai_validations"
+    __table_args__ = (
+        Index(
+            "ix_ai_validations_signal_decided",
+            "signal_id",
+            "decided_at",
+        ),
+        Index(
+            "ix_ai_validations_provider_decided",
+            "provider_used",
+            "decided_at",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    signal_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("signals.id"), nullable=False
+    )
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    provider_used: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
+    model_used: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    request_hash: Mapped[str] = mapped_column(String(32), nullable=False)
+    response_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    approve: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    confidence: Mapped[Decimal] = mapped_column(
+        Numeric(precision=5, scale=4), nullable=False, default=Decimal("0")
+    )
+    latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
