@@ -29,6 +29,7 @@ from mib.backtest.fill_simulator import (
     SlippageConfig,
     SlippageFillSimulator,
 )
+from mib.backtest.repo import BacktestRun, BacktestRunInput, BacktestRunRepository
 from mib.backtest.types import BacktestBar, BacktestSettings, BacktestTrade
 
 __all__ = [
@@ -36,6 +37,9 @@ __all__ = [
     "BacktestBar",
     "BacktestFeed",
     "BacktestReport",
+    "BacktestRun",
+    "BacktestRunInput",
+    "BacktestRunRepository",
     "BacktestSettings",
     "BacktestTrade",
     "EquityPoint",
