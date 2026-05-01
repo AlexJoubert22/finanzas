@@ -40,6 +40,7 @@ from mib.telegram.handlers.macro import macro as macro_handler
 from mib.telegram.handlers.mode import mode_cmd, mode_force_cmd, mode_status_cmd
 from mib.telegram.handlers.news import news as news_handler
 from mib.telegram.handlers.panic import panic_cmd
+from mib.telegram.handlers.preflight import preflight_cmd
 from mib.telegram.handlers.price import price as price_handler
 from mib.telegram.handlers.reconcile import reconcile_cmd
 from mib.telegram.handlers.scan import scan as scan_handler
@@ -94,6 +95,7 @@ def build_application() -> BotApp:
     app.add_handler(CommandHandler("backtest", backtest_cmd), group=-1)
     app.add_handler(CommandHandler("incident", incident_cmd), group=-1)
     app.add_handler(CommandHandler("panic", panic_cmd), group=-1)
+    app.add_handler(CommandHandler("preflight", preflight_cmd), group=-1)
     app.add_handler(CommandHandler("mode", mode_cmd), group=-1)
     app.add_handler(CommandHandler("mode_status", mode_status_cmd), group=-1)
     app.add_handler(CommandHandler("mode_force", mode_force_cmd), group=-1)
