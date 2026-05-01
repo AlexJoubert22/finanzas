@@ -181,6 +181,40 @@ def test_existing_exposure_at_cap_returns_zero() -> None:
     assert "max_per_ticker" in result.caps_applied
 
 
+def test_paper_baseline_30_usdt_risk_at_default_pct() -> None:
+    """With paper_initial_capital_quote=6000 and risk_per_trade_pct=0.005,
+    money risk per trade is exactly 30 USDT — the central invariant
+    the operator relies on for PAPER scaling decisions.
+
+    With the default test signal's ATR=2, a stop at 1.5×ATR places
+    invalidation 3 below entry. The natural size hits the 10% per-position
+    cap (600 USDT > 30 USDT pure-risk size), which is the expected
+    behaviour: the sizer prefers the smaller of pure-risk-size and
+    per-position cap. We assert the pure-risk math separately by
+    placing the stop wide enough that no cap fires.
+    """
+    settings = get_settings()
+    assert settings.risk_per_trade_pct == 0.005
+    assert settings.paper_initial_capital_quote == Decimal("6000.0")
+
+    expected_risk = settings.paper_initial_capital_quote * Decimal(
+        str(settings.risk_per_trade_pct)
+    )
+    assert expected_risk == Decimal("30.000")
+
+    # Wide stop (entry 100, invalidation 70 -> distance 30) so caps don't
+    # bite: units = 30/30 = 1; size_quote = 100; well under all caps.
+    sizer = PositionSizer()
+    sig = _signal(entry=100.0, invalidation=70.0, target_1=130.0, target_2=190.0)
+    pf = _portfolio(equity=Decimal("6000"))
+    result = sizer.size(sig, pf, settings)
+    assert result.caps_applied == ()  # no caps fired
+    units = result.amount / Decimal("100")
+    money_at_risk = units * Decimal("30")  # distance
+    # Tolerance < 1 cent.
+    assert abs(money_at_risk - Decimal("30")) < Decimal("0.01")
+
+
 def test_decimal_arithmetic_no_float_rounding() -> None:
     """Result is Decimal with at most 8 decimal places (exchange precision).
     Float intermediate noise (e.g. 0.1 + 0.2 != 0.3) cannot leak through.

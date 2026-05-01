@@ -407,11 +407,30 @@ def get_news_reactor() -> NewsReactor:
 
 
 def get_portfolio_state() -> PortfolioState:
-    """FASE 8.2+ portfolio cache, refreshed by `portfolio_sync_job`."""
+    """FASE 8.2+ portfolio cache, refreshed by `portfolio_sync_job`.
+
+    Wired with the PAPER-mode baseline floor: when current mode is
+    PAPER and exchange-reported equity is below
+    ``paper_initial_capital_quote``, the snapshot returns the
+    baseline so sizing/PnL stay anchored across testnet resets.
+    """
     global _portfolio_state  # noqa: PLW0603
     if _portfolio_state is None:
-        _portfolio_state = PortfolioState(trader=get_ccxt_trader())
+        s = get_settings()
+        _portfolio_state = PortfolioState(
+            trader=get_ccxt_trader(),
+            paper_baseline=s.paper_initial_capital_quote,
+            mode_resolver=_paper_mode_resolver,
+        )
     return _portfolio_state
+
+
+async def _paper_mode_resolver():  # type: ignore[no-untyped-def]
+    """Resolve current TradingMode for PortfolioState. Late import
+    keeps the dependencies module importable without booting mode
+    services, useful in trimmed test harnesses.
+    """
+    return await get_mode_service().get_current()
 
 
 def get_trading_state_service() -> TradingStateService:

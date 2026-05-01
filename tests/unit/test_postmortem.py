@@ -334,3 +334,72 @@ async def test_trades_outside_target_date_excluded(
     )
     report = await runner.run_for_date(target)
     assert report.trades_analyzed == 1
+
+
+# ─── Weekly comparatives (PAPER prep) ────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_weekly_comparatives_absent_with_no_history(
+    fresh_db: None,  # noqa: ARG001
+) -> None:
+    """No trades older than the current 7d → comparatives section omitted."""
+    target = date(2026, 4, 30)
+    closed_at = datetime(2026, 4, 30, 14, 0)
+    await _seed_closed_trade(closed_at=closed_at, pnl=Decimal("3.0"))
+
+    router = _StubRouter(
+        AIResponse(success=True, content=_ok_payload(), provider=None, model="")
+    )
+    runner = DailyPostmortemRunner(
+        ai_router=router,  # type: ignore[arg-type]
+        session_factory=async_session_factory,
+    )
+    await runner.run_for_date(target)
+    assert len(router.calls) == 1
+    sent = router.calls[0].prompt or ""
+    assert "WEEKLY COMPARATIVES" not in sent
+
+
+@pytest.mark.asyncio
+async def test_weekly_comparatives_included_with_history(
+    fresh_db: None,  # noqa: ARG001
+) -> None:
+    """Previous-week trades present → comparatives injected into prompt."""
+    target = date(2026, 4, 30)
+    # Current week trade (today).
+    await _seed_closed_trade(
+        strategy="scanner.cur.v1",
+        closed_at=datetime(2026, 4, 30, 14, 0),
+        pnl=Decimal("5.0"),
+    )
+    # Previous-week trades (~10 days ago — falls in [target-13, target-6)).
+    await _seed_closed_trade(
+        strategy="scanner.prev1.v1",
+        closed_at=datetime(2026, 4, 20, 12, 0),
+        pnl=Decimal("2.0"),
+    )
+    await _seed_closed_trade(
+        strategy="scanner.prev2.v1",
+        closed_at=datetime(2026, 4, 21, 12, 0),
+        pnl=Decimal("-1.0"),
+    )
+
+    router = _StubRouter(
+        AIResponse(success=True, content=_ok_payload(), provider=None, model="")
+    )
+    runner = DailyPostmortemRunner(
+        ai_router=router,  # type: ignore[arg-type]
+        session_factory=async_session_factory,
+    )
+    await runner.run_for_date(target)
+    assert len(router.calls) == 1
+    sent = router.calls[0].prompt or ""
+    assert "WEEKLY COMPARATIVES" in sent
+    assert "current_week" in sent
+    assert "previous_week" in sent
+    # Aggregate PnL of previous week = 2.0 + (-1.0) = 1.0.
+    # The Decimal serialises as "1.00000000" with the Decimal payload's
+    # 8-decimal precision; we look for the decimal stem.
+    assert '"previous_week"' in sent and '"aggregate_pnl_quote": "1' in sent.split('"previous_week"', 1)[1]
+    assert '"win_rate": 0.5' in sent  # 1W/1L in previous week

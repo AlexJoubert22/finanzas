@@ -184,6 +184,40 @@ async def test_daily_report_negative_pnl_uses_red_marker(
 
 
 @pytest.mark.asyncio
+async def test_daily_report_paper_header_and_pct(
+    fresh_db: None,  # noqa: ARG001
+) -> None:
+    """In PAPER mode the header + % over baseline are rendered."""
+    await _seed_state(mode="paper")
+    fixed_now = datetime(2026, 5, 1, 8, 0)
+    yesterday = datetime(2026, 4, 30, 14, 0)
+    await _insert_closed_trade(pnl=Decimal("60"), closed_at=yesterday)
+
+    msg = await dr_mod.build_daily_report(
+        session_factory=async_session_factory, now=fixed_now
+    )
+    assert "PAPER MODE" in msg
+    assert "Capital virtual baseline:" in msg
+    assert "<code>6000.0</code> USDT" in msg
+    # PnL día = 60 over 6000 baseline = 1.00%.
+    assert "<code>60</code> (1.00%)" in msg
+
+
+@pytest.mark.asyncio
+async def test_daily_report_no_paper_header_outside_paper(
+    fresh_db: None,  # noqa: ARG001
+) -> None:
+    """In non-PAPER modes the PAPER header is suppressed."""
+    await _seed_state(mode="shadow")
+    msg = await dr_mod.build_daily_report(
+        session_factory=async_session_factory
+    )
+    assert "PAPER MODE" not in msg
+    # No percentage suffix either.
+    assert "%" not in msg
+
+
+@pytest.mark.asyncio
 async def test_daily_report_swallows_alerter_failure(
     fresh_db: None,  # noqa: ARG001
     monkeypatch: pytest.MonkeyPatch,

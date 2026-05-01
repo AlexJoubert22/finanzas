@@ -45,12 +45,20 @@ class PortfolioState:
         *,
         ttl_seconds: int = DEFAULT_TTL_SECONDS,
         quote_currency: str = "EUR",
+        paper_baseline: Decimal | None = None,
+        mode_resolver: Any = None,
     ) -> None:
         self._trader = trader
         self._ttl = timedelta(seconds=ttl_seconds)
         self._quote = quote_currency
         self._cache: PortfolioSnapshot | None = None
         self._lock = asyncio.Lock()
+        # PAPER prep: when mode_resolver returns PAPER and computed
+        # equity is below paper_baseline, the snapshot's equity_quote
+        # is padded up to the baseline. Sizing and PnL/% remain
+        # anchored to a stable reference even after testnet resets.
+        self._paper_baseline = paper_baseline
+        self._mode_resolver = mode_resolver
 
     async def snapshot(self) -> PortfolioSnapshot:
         """Return current snapshot, refreshing if stale or absent."""
@@ -96,6 +104,7 @@ class PortfolioState:
         balances = _parse_balances(raw_balance)
         positions = _parse_positions(raw_positions)
         equity = _compute_equity_quote(balances, positions, quote=self._quote)
+        equity = await self._maybe_floor_to_paper_baseline(equity)
 
         return PortfolioSnapshot(
             balances=balances,
@@ -104,6 +113,32 @@ class PortfolioState:
             last_synced_at=datetime.now(UTC),
             source=source,
         )
+
+    async def _maybe_floor_to_paper_baseline(
+        self, equity: Decimal
+    ) -> Decimal:
+        """When in PAPER and equity < paper_baseline, return the
+        baseline. No-op outside PAPER or when baseline is unset.
+        """
+        if self._paper_baseline is None or self._mode_resolver is None:
+            return equity
+        try:
+            current_mode = await self._mode_resolver()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("portfolio: mode_resolver failed: {}", exc)
+            return equity
+        # Avoid importing TradingMode here to keep cycles out; compare
+        # against the .value the resolver returns.
+        mode_value = getattr(current_mode, "value", current_mode)
+        if mode_value != "paper":
+            return equity
+        if equity < self._paper_baseline:
+            logger.debug(
+                "portfolio: PAPER equity {} < baseline {} — flooring",
+                equity, self._paper_baseline,
+            )
+            return self._paper_baseline
+        return equity
 
 
 # ─── Parsers (CCXT shape → typed models) ───────────────────────────

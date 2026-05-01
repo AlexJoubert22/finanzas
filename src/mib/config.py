@@ -8,6 +8,7 @@ Usage:
     settings = get_settings()
 """
 
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 
@@ -38,6 +39,10 @@ class Settings(BaseSettings):
     # ─── Telegram ───────────────────────────────────────────────────
     telegram_bot_token: str = ""
     telegram_allowed_users: str = ""
+    # Chat ID where scheduled scanner jobs and the daily report send
+    # their cards. ``0`` disables the scheduler-side delivery (the
+    # /scan ad-hoc handler and /paper_status still work).
+    operator_telegram_id: int = 0
 
     # ─── API server ─────────────────────────────────────────────────
     # Default: loopback only (spec §13). Inside Docker containers this
@@ -118,6 +123,13 @@ class Settings(BaseSettings):
     )
     max_position_pct: float = Field(default=0.10, gt=0.0, le=1.0)
     min_notional_quote: float = Field(default=10.0, ge=0.0)
+
+    # ─── PAPER mode baseline (pre-PAPER tweak) ──────────────────────
+    # Virtual capital baseline used in PAPER. When the testnet balance
+    # falls below this (testnet resets, partial fills consumed cash),
+    # PortfolioState pads equity_quote up to this value so sizing math
+    # and PnL/% computations stay anchored to a stable reference.
+    paper_initial_capital_quote: Decimal = Field(default=Decimal("6000.0"))
 
     # ─── Dead-man heartbeat (FASE 13.7) ─────────────────────────────
     # Token authenticating the public /heartbeat endpoint. Set to a

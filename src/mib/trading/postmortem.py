@@ -105,7 +105,7 @@ class DailyPostmortemRunner:
             return await self._persist(report)
 
         # LLM analysis.
-        llm_outcome = await self._call_llm(trades)
+        llm_outcome = await self._call_llm(trades, target_date=target_date)
         report = PostmortemReport(
             date_utc=date_str,
             trades_analyzed=trades_analyzed,
@@ -150,12 +150,41 @@ class DailyPostmortemRunner:
             )
             return list((await session.scalars(stmt)).all())
 
-    async def _call_llm(self, trades: list[TradeRow]) -> _LLMOutcome:
+    async def _call_llm(
+        self,
+        trades: list[TradeRow],
+        *,
+        target_date: date | None = None,
+    ) -> _LLMOutcome:
         batch = [_serialise_trade(t) for t in trades]
+
+        # Pre-PAPER tweak: when history allows (≥7 days of trades older
+        # than the target date), enrich the prompt with week-over-week
+        # comparatives so the LLM can identify trends, not just point
+        # observations. Failure to compute comparatives is non-fatal —
+        # the postmortem still runs over today's batch alone.
+        weekly_section = ""
+        if target_date is not None:
+            try:
+                comparatives = await self._weekly_comparatives(target_date)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug(
+                    "postmortem: weekly comparatives failed: {}", exc
+                )
+                comparatives = None
+            if comparatives is not None:
+                weekly_section = (
+                    "\n\nWEEKLY COMPARATIVES (current week vs previous):\n"
+                    f"{json.dumps(comparatives, default=str)}\n"
+                    "Use these to identify week-over-week trends, not just "
+                    "single-day observations.\n"
+                )
+
         user_message = (
             "Analyse the following batch of closed trades from the last "
             "24h. Use the schema documented in the system prompt.\n\n"
-            f"BATCH (n={len(batch)}):\n{json.dumps(batch, default=str)}\n"
+            f"BATCH (n={len(batch)}):\n{json.dumps(batch, default=str)}"
+            f"{weekly_section}"
         )
         task = AITask(
             task_type=TaskType.TRADE_POSTMORTEM,
@@ -201,6 +230,50 @@ class DailyPostmortemRunner:
             model_used=response.model or None,
             latency_ms=response.latency_ms or latency_ms,
         )
+
+    async def _weekly_comparatives(
+        self, target_date: date
+    ) -> dict[str, Any] | None:
+        """Return current-week vs previous-week aggregate stats.
+
+        Definition:
+          current_week  = closed_at in [target-6d, target+1d) (7 days)
+          previous_week = closed_at in [target-13d, target-6d) (7 days)
+
+        Returns ``None`` when previous_week is empty — without history
+        the comparison is meaningless.
+        """
+        target_start = datetime.combine(target_date, datetime.min.time())
+        cur_start = target_start - timedelta(days=6)
+        cur_end = target_start + timedelta(days=1)
+        prev_start = target_start - timedelta(days=13)
+        prev_end = cur_start
+
+        cur = await self._fetch_trades_in_window(cur_start, cur_end)
+        prev = await self._fetch_trades_in_window(prev_start, prev_end)
+        if not prev:
+            return None
+
+        return {
+            "current_week": _aggregate_week_stats(cur),
+            "previous_week": _aggregate_week_stats(prev),
+        }
+
+    async def _fetch_trades_in_window(
+        self, start: datetime, end: datetime
+    ) -> list[TradeRow]:
+        async with self._sf() as session:
+            stmt = (
+                select(TradeRow)
+                .where(
+                    TradeRow.status == "closed",
+                    TradeRow.closed_at.is_not(None),
+                    TradeRow.closed_at >= start,
+                    TradeRow.closed_at < end,
+                )
+                .order_by(TradeRow.closed_at.asc())
+            )
+            return list((await session.scalars(stmt)).all())
 
     async def _persist(self, report: PostmortemReport) -> PostmortemReport:
         try:
@@ -254,6 +327,55 @@ class _LLMOutcome:
     model_used: str | None = None
     latency_ms: int = 0
     error: str | None = None
+
+
+def _aggregate_week_stats(trades: list[TradeRow]) -> dict[str, Any]:
+    """Aggregate stats for a list of closed trades.
+
+    R-multiple per trade = realized_pnl / (|entry - stop_loss| × size).
+    Trades missing stop_loss_price (None or 0) are excluded from the
+    R-multiple average to avoid divide-by-zero noise.
+    """
+    if not trades:
+        return {
+            "trades": 0,
+            "aggregate_pnl_quote": "0",
+            "wins": 0,
+            "losses": 0,
+            "win_rate": 0.0,
+            "avg_r_multiple": None,
+        }
+    pnl = Decimal(0)
+    wins = losses = 0
+    r_multiples: list[Decimal] = []
+    for t in trades:
+        v = Decimal(str(t.realized_pnl_quote or 0))
+        pnl += v
+        if v > 0:
+            wins += 1
+        elif v < 0:
+            losses += 1
+        stop = Decimal(str(t.stop_loss_price or 0))
+        entry = Decimal(str(t.entry_price))
+        size = Decimal(str(t.size))
+        risk = abs(entry - stop) * size
+        if risk > 0:
+            r_multiples.append(v / risk)
+    decided = wins + losses
+    win_rate = float(wins / decided) if decided else 0.0
+    avg_r = (
+        float(sum(r_multiples) / Decimal(len(r_multiples)))
+        if r_multiples
+        else None
+    )
+    return {
+        "trades": len(trades),
+        "aggregate_pnl_quote": str(pnl),
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round(win_rate, 4),
+        "avg_r_multiple": round(avg_r, 4) if avg_r is not None else None,
+    }
 
 
 def _serialise_trade(t: TradeRow) -> dict[str, Any]:

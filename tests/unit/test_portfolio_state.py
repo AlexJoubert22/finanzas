@@ -177,6 +177,67 @@ async def test_position_unrealized_pnl_rolls_into_equity() -> None:
 
 
 @pytest.mark.asyncio
+async def test_paper_baseline_floor_applied_when_below() -> None:
+    """In PAPER, equity below baseline is floored up."""
+
+    async def resolver():  # type: ignore[no-untyped-def]
+        return "paper"  # str works because resolver compares value
+
+    state = PortfolioState(
+        _trader(),
+        paper_baseline=Decimal("6000"),
+        mode_resolver=resolver,
+    )
+    snap = await state.snapshot()
+    # Dry-run trader returns 0 equity; baseline floor lifts it.
+    assert snap.equity_quote == Decimal("6000")
+
+
+@pytest.mark.asyncio
+async def test_paper_baseline_not_applied_above() -> None:
+    """When equity already above baseline, leave it alone."""
+
+    class FatTrader(CCXTTrader):
+        async def fetch_balance(self) -> dict[str, Any]:
+            return {
+                "free": {"EUR": "8000"},
+                "used": {"EUR": "0"},
+                "total": {"EUR": "8000"},
+                "info": {},
+            }
+
+        async def fetch_positions(
+            self, symbols: list[str] | None = None  # noqa: ARG002
+        ) -> list[dict[str, Any]]:
+            return []
+
+    async def resolver():  # type: ignore[no-untyped-def]
+        return "paper"
+
+    state = PortfolioState(
+        FatTrader(dry_run=True),
+        paper_baseline=Decimal("6000"),
+        mode_resolver=resolver,
+    )
+    snap = await state.snapshot()
+    assert snap.equity_quote == Decimal("8000")
+
+
+@pytest.mark.asyncio
+async def test_paper_baseline_not_applied_outside_paper() -> None:
+    async def resolver():  # type: ignore[no-untyped-def]
+        return "shadow"
+
+    state = PortfolioState(
+        _trader(),
+        paper_baseline=Decimal("6000"),
+        mode_resolver=resolver,
+    )
+    snap = await state.snapshot()
+    assert snap.equity_quote == Decimal(0)  # no floor outside PAPER
+
+
+@pytest.mark.asyncio
 async def test_snapshot_is_immutable() -> None:
     """Frozen Pydantic raises ``ValidationError`` on attribute set."""
     from pydantic import ValidationError  # noqa: PLC0415

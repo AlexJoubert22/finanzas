@@ -148,6 +148,15 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
 
+    # PAPER prep — scheduled scanner jobs, one per preset, with cron
+    # cadences from config/scanner_universe.yaml. The job short-circuits
+    # when bot or operator_telegram_id is missing (API-only deploys).
+    from mib.trading.jobs.scanner_jobs import (  # noqa: PLC0415
+        register_scanner_jobs,
+    )
+
+    register_scanner_jobs(sched)
+
     # FASE 13.8 — 6-hour Telegram heartbeat snapshot. Cron fires at
     # 00/06/12/18 UTC. The endpoint heartbeat (FASE 13.7) is
     # canonical for liveness; this job adds operator-readable

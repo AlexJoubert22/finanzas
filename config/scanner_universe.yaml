@@ -1,0 +1,29 @@
+# Universo activo para scanner en PAPER mode.
+# 10 pares líquidos en Binance Testnet con histórico suficiente
+# (≥6 meses) para que los presets oversold/breakout/trending tengan
+# señal estadística. Editar en caliente requiere reinicio del bot.
+paper_mode_universe:
+  - BTC/USDT
+  - ETH/USDT
+  - SOL/USDT
+  - BNB/USDT
+  - XRP/USDT
+  - AVAX/USDT
+  - POL/USDT
+  - LINK/USDT
+  - ARB/USDT
+  - OP/USDT
+
+# Cadencias por preset (UTC, alineadas a candle close + 30s offset).
+# El offset de 30s evita la race con la propia formación del candle:
+# a HH:30 el candle de la hora previa ya está cerrado y propagado.
+scanner_schedules:
+  oversold:
+    cron: "30 * * * *"          # cada hora a HH:30 UTC
+    timeframe: "1h"
+  breakout:
+    cron: "30 0,4,8,12,16,20 * * *"   # cada 4h a HH:30 UTC
+    timeframe: "4h"
+  trending:
+    cron: "30 0 * * *"          # diario a 00:30 UTC
+    timeframe: "1d"

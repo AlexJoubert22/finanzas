@@ -32,10 +32,12 @@ from mib.api.dependencies import (
     get_portfolio_state,
     get_trade_repository,
 )
+from mib.config import get_settings
 from mib.db.session import async_session_factory
 from mib.logger import logger
 from mib.observability.clean_streak import compute_days_clean_streak
 from mib.observability.scheduler_health import get_scheduler_health
+from mib.trading.mode import TradingMode
 from mib.trading.mode_guards import days_in_current_mode
 
 
@@ -88,19 +90,53 @@ async def build_daily_report(
         else "n/a"
     )
 
+    settings = get_settings()
+    is_paper = mode == TradingMode.PAPER
+    baseline = settings.paper_initial_capital_quote if is_paper else None
+    paper_header = (
+        f"🎮 <b>PAPER MODE</b> — Capital virtual baseline: "
+        f"<code>{baseline}</code> USDT\n"
+        if is_paper
+        else ""
+    )
+    pnl_pct_str = ""
+    week_pnl_pct_str = ""
+    drawdown_str = ""
+    if baseline is not None and baseline > 0:
+        day_pct = (day_stats.pnl / baseline) * Decimal(100)
+        week_pct = (week_pnl / baseline) * Decimal(100)
+        pnl_pct_str = f" ({day_pct.quantize(Decimal('0.01'))}%)"
+        week_pnl_pct_str = f" ({week_pct.quantize(Decimal('0.01'))}%)"
+        # DD vs baseline: only meaningful when current equity is known
+        # and below baseline.
+        equity = await _safe_equity_quote()
+        if equity is not None:
+            dd_abs = baseline - equity
+            if dd_abs > 0:
+                dd_pct = (dd_abs / baseline) * Decimal(100)
+                drawdown_str = (
+                    f"  drawdown vs baseline: <code>"
+                    f"{dd_abs.quantize(Decimal('0.01'))}</code> "
+                    f"(<code>{dd_pct.quantize(Decimal('0.01'))}%</code>)\n"
+                )
+
     return (
+        f"{paper_header}"
         "🌅 <b>MIB Daily Report</b> "
         f"<i>(D-1: {yesterday_start.date()})</i>\n"
-        f"  PnL día: {pnl_marker} <code>{day_stats.pnl}</code>\n"
+        f"  PnL día: {pnl_marker} <code>{day_stats.pnl}</code>"
+        f"{pnl_pct_str}\n"
         f"  trades: <code>{day_stats.trades}</code> "
         f"(W:<code>{day_stats.wins}</code> "
         f"L:<code>{day_stats.losses}</code> "
         f"BE:<code>{day_stats.breakevens}</code>) "
         f"win-rate: <code>{win_rate}</code>\n"
-        f"  PnL 7d: {week_marker} <code>{week_pnl}</code>\n"
+        f"  PnL 7d: {week_marker} <code>{week_pnl}</code>"
+        f"{week_pnl_pct_str}\n"
         f"  posiciones abiertas: <code>{open_count}</code> "
         f"<i>{tickers_str}</i>\n"
         f"  equity: <code>{portfolio_summary}</code>\n"
+        f"{drawdown_str}"
         f"  modo: <code>{mode.value}</code> "
         f"(día <code>{days_in_mode_int}</code>)\n"
         f"  días limpios: <code>{streak}</code>\n"
@@ -216,6 +252,14 @@ async def _safe_portfolio_summary() -> str:
         logger.debug("daily_report: portfolio snapshot failed: {}", exc)
         return "n/a"
     return f"{snap.equity_quote} ({snap.source})"
+
+
+async def _safe_equity_quote() -> Decimal | None:
+    try:
+        snap = await get_portfolio_state().snapshot()
+    except Exception:  # noqa: BLE001
+        return None
+    return snap.equity_quote
 
 
 async def _current_mode() -> Any:  # TradingMode is imported lazily.
