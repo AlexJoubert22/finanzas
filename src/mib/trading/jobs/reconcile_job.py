@@ -16,16 +16,21 @@ from __future__ import annotations
 from mib.api.dependencies import get_incident_emitter, get_reconciler
 from mib.logger import logger
 from mib.observability.reconcile_supervisor import get_reconcile_supervisor
+from mib.observability.scheduler_health import get_scheduler_health
 
 
 async def reconcile_job() -> None:
     """One tick of the reconciliation loop, triggered by APScheduler."""
+    health = get_scheduler_health()
+    health.mark_tick()
     reconciler = get_reconciler()
     supervisor = get_reconcile_supervisor()
     success: bool
     try:
         report = await reconciler.reconcile(triggered_by="scheduler")
         success = report.status != "error"
+        if success:
+            health.mark_reconcile()
     except Exception as exc:  # noqa: BLE001 — never crash the scheduler
         logger.warning("reconcile_job: unexpected failure: {}", exc)
         success = False

@@ -13,6 +13,7 @@ import time
 
 from mib.api.dependencies import get_portfolio_state
 from mib.logger import logger
+from mib.observability.scheduler_health import get_scheduler_health
 
 
 async def portfolio_sync_job() -> None:
@@ -22,6 +23,9 @@ async def portfolio_sync_job() -> None:
     sync latency in ms. The job never raises — APScheduler keeps
     ticking even if a single fetch fails.
     """
+    # Heartbeat scheduler liveness even if the actual fetch fails —
+    # the scheduler ITSELF is alive as long as this function runs.
+    get_scheduler_health().mark_tick()
     state = get_portfolio_state()
     started = time.monotonic()
     try:
