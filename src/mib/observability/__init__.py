@@ -14,6 +14,13 @@ inside this subpackage. Sub-commits build it in this order:
 - 13.8 — 6h Telegram heartbeat
 """
 
+from mib.observability.incidents import (
+    SEVERE_TYPES_RESET_ALWAYS,
+    CriticalIncident,
+    CriticalIncidentRepository,
+    CriticalIncidentType,
+    IncidentAlreadyResolvedError,
+)
 from mib.observability.metrics import (
     MetricsRegistry,
     get_metrics_registry,
@@ -21,6 +28,11 @@ from mib.observability.metrics import (
 )
 
 __all__ = [
+    "SEVERE_TYPES_RESET_ALWAYS",
+    "CriticalIncident",
+    "CriticalIncidentRepository",
+    "CriticalIncidentType",
+    "IncidentAlreadyResolvedError",
     "MetricsRegistry",
     "get_metrics_registry",
     "render_metrics_text",

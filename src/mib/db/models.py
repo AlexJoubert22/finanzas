@@ -705,6 +705,72 @@ class AIValidationRow(Base):
     decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
+# ─── Critical incidents (FASE 13.2) ──────────────────────────────────
+class CriticalIncidentRow(Base):
+    """Persisted record of one operational incident.
+
+    BORN APPEND-ONLY for the audit trail, with TWO well-defined
+    structural updates allowed:
+
+    - ``resolved_at``: set ONCE when the incident is resolved.
+    - ``resolution_notes``: written ONCE alongside resolved_at.
+
+    All other fields are immutable. The repo enforces "set once" by
+    raising if either column is already populated. Direct UPDATE
+    from anywhere except the resolve_incident helper is forbidden by
+    convention.
+
+    The ``type`` column is policed by a CHECK constraint listing the
+    7 enum values (FASE 13 ROADMAP Apéndice A).
+    """
+
+    __tablename__ = "critical_incidents"
+    __table_args__ = (
+        Index(
+            "ix_critical_incidents_type_occurred",
+            "type",
+            "occurred_at",
+        ),
+        Index(
+            "ix_critical_incidents_occurred_at",
+            "occurred_at",
+        ),
+        CheckConstraint(
+            "type IN ("
+            "'reconcile.orphan_unresolved', "
+            "'reconcile.balance_unattributed', "
+            "'circuit_breaker.open_over_15min', "
+            "'executor.stop_missing_post_fill', "
+            "'risk.kill_switch_daily_dd', "
+            "'ops.manual_intervention', "
+            "'reconcile.failed_over_30min'"
+            ")",
+            name="ck_critical_incidents_type",
+        ),
+        CheckConstraint(
+            "severity IN ('info', 'warning', 'critical')",
+            name="ck_critical_incidents_severity",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    type: Mapped[str] = mapped_column(String(48), nullable=False)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    auto_detected: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+    severity: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="warning"
+    )
+    context_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    resolution_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 # ─── Backtest runs (append-only, FASE 12.5) ──────────────────────────
 class BacktestRunRow(Base):
     """One row per ``Backtester.run`` call.
