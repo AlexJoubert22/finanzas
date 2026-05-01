@@ -134,6 +134,20 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
 
+    # FASE 14.4 — Daily report at 06:00 UTC (≈ 08:00 Madrid).
+    # Cron in UTC so DST shifts the local hour by ±1 — acceptable for
+    # an operator-readable summary; nothing downstream depends on the
+    # exact local time.
+    from mib.trading.jobs.daily_report import daily_report_job  # noqa: PLC0415
+
+    sched.add_job(
+        daily_report_job,
+        trigger=CronTrigger(hour=6, minute=0, timezone="UTC"),
+        id="daily_report",
+        name="Daily MIB report (06:00 UTC ≈ 08:00 Madrid)",
+        replace_existing=True,
+    )
+
     # FASE 13.8 — 6-hour Telegram heartbeat snapshot. Cron fires at
     # 00/06/12/18 UTC. The endpoint heartbeat (FASE 13.7) is
     # canonical for liveness; this job adds operator-readable
@@ -159,7 +173,8 @@ def start_scheduler() -> None:
     logger.info(
         "scheduler: started with health probe (5min) + expire_stale_signals (15min) "
         "+ portfolio_sync (30s) + reconcile (5min) + news_reactor (5min) "
-        "+ daily_postmortem (02:00) + telegram_heartbeat (every 6h)"
+        "+ daily_postmortem (02:00) + daily_report (06:00) "
+        "+ telegram_heartbeat (every 6h)"
     )
 
 
