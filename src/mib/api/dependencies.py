@@ -16,6 +16,8 @@ from mib.ai.router import AIRouter
 from mib.backtest.repo import BacktestRunRepository
 from mib.config import get_settings
 from mib.db.session import async_session_factory
+from mib.observability.emitter import IncidentEmitter
+from mib.observability.incidents import CriticalIncidentRepository
 from mib.services.ai_service import AIService
 from mib.services.macro import MacroService
 from mib.services.market import MarketService
@@ -87,6 +89,8 @@ _mode_service: ModeService | None = None
 _news_reactor: NewsReactor | None = None
 _postmortem_runner: DailyPostmortemRunner | None = None
 _backtest_run_repo: BacktestRunRepository | None = None
+_incident_repo: CriticalIncidentRepository | None = None
+_incident_emitter: IncidentEmitter | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -312,7 +316,10 @@ def get_order_executor() -> OrderExecutor:
             order_repo=order_repo,
             trade_repo=get_trade_repository(),
             fill_detector=FillDetector(trader, order_repo),
-            stop_placer=NativeStopPlacer(trader, order_repo, alerter),
+            stop_placer=NativeStopPlacer(
+                trader, order_repo, alerter,
+                incident_emitter=get_incident_emitter(),
+            ),
             alerter=alerter,
             exchange_id=(
                 "binance_sandbox" if trader.is_sandbox else "binance"
@@ -334,8 +341,27 @@ def get_reconciler() -> Reconciler:
             portfolio_state=get_portfolio_state(),
             order_repo=get_order_repository(),
             session_factory=async_session_factory,
+            incident_emitter=get_incident_emitter(),
         )
     return _reconciler
+
+
+def get_incident_repo() -> CriticalIncidentRepository:
+    """FASE 13.2+ persistence boundary for ``critical_incidents``."""
+    global _incident_repo  # noqa: PLW0603
+    if _incident_repo is None:
+        _incident_repo = CriticalIncidentRepository(async_session_factory)
+    return _incident_repo
+
+
+def get_incident_emitter() -> IncidentEmitter:
+    """FASE 13.3+ helper that writes the DB row + bumps the Prometheus
+    counter atomically. Used by every auto-detection emitter.
+    """
+    global _incident_emitter  # noqa: PLW0603
+    if _incident_emitter is None:
+        _incident_emitter = IncidentEmitter(get_incident_repo())
+    return _incident_emitter
 
 
 def get_backtest_run_repo() -> BacktestRunRepository:
@@ -425,7 +451,10 @@ def get_risk_manager() -> RiskManager:
         decisions_repo = get_risk_decision_repository()
         gates: list[Gate] = [
             KillSwitchGate(state),
-            DailyDrawdownGate(state, async_session_factory),
+            DailyDrawdownGate(
+                state, async_session_factory,
+                incident_emitter=get_incident_emitter(),
+            ),
             ExposurePerTickerGate(signals_repo, decisions_repo),
             CorrelationGroupGate(
                 get_correlation_groups(), signals_repo, decisions_repo

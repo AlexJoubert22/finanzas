@@ -53,6 +53,9 @@ from mib.db.models import (
 )
 from mib.logger import logger
 from mib.models.portfolio import PortfolioSnapshot
+from mib.observability.emitter import IncidentEmitter
+from mib.observability.incidents import CriticalIncidentType
+from mib.observability.metrics import get_metrics_registry
 from mib.sources.ccxt_trader import CCXTTrader
 from mib.trading.alerter import NullAlerter, TelegramAlerter
 from mib.trading.order_repo import OrderRepository
@@ -121,6 +124,7 @@ class Reconciler:
         session_factory: async_sessionmaker[AsyncSession],
         alerter: TelegramAlerter | None = None,
         symbols: tuple[str, ...] = ("BTC/USDT",),
+        incident_emitter: IncidentEmitter | None = None,
     ) -> None:
         self._trader = trader
         self._portfolio = portfolio_state
@@ -131,6 +135,7 @@ class Reconciler:
         # every market on Binance is wasteful when the bot only trades
         # a handful of tickers.
         self._symbols = symbols
+        self._incidents = incident_emitter
 
     async def reconcile(self, *, triggered_by: str) -> ReconcileReport:
         """Run one reconciliation pass. Never raises — failures land in
@@ -186,6 +191,8 @@ class Reconciler:
                 report.balance_drift_count,
                 elapsed_ms,
             )
+            # Bump per-kind counter + emit incidents (FASE 13.3).
+            await self._record_metrics_and_incidents(report)
             if discrepancies:
                 await self._alert(report)
             return report
@@ -204,6 +211,9 @@ class Reconciler:
                 report = _with_run_id(report, run_id)
             except Exception as persist_exc:  # noqa: BLE001
                 logger.error("reconcile: failed to persist error run: {}", persist_exc)
+            # Reconciler-prolonged incident is emitted by an external
+            # supervisor (FASE 13.3 reconcile_failed_supervisor) which
+            # tracks consecutive errors over a 30-minute window.
             return report
 
     # ─── Exchange + DB readers ─────────────────────────────────────
@@ -334,6 +344,65 @@ class Reconciler:
             await self._alerter.alert("\n".join(lines))
         except Exception as exc:  # noqa: BLE001
             logger.warning("reconcile: alert failed: {}", exc)
+
+    async def _record_metrics_and_incidents(
+        self, report: ReconcileReport
+    ) -> None:
+        """FASE 13.3: bump the per-kind discrepancy counter + emit the
+        right :class:`CriticalIncidentType` for each finding.
+
+        Mapping (per ROADMAP Apéndice A):
+        - orphan_db unresolved (couldn't auto-patch) →
+          RECONCILE_ORPHAN_UNRESOLVED
+        - balance_drift                              →
+          BALANCE_DISCREPANCY
+        ``orphan_exchange`` is logged as a discrepancy but does NOT
+        emit an incident — the most common cause is a manual operator
+        order outside MIB, which is informational rather than critical.
+        """
+        # Always bump the metric, even if the emitter isn't wired (tests).
+        try:
+            reg = get_metrics_registry()
+            for d in report.discrepancies:
+                reg.reconcile_discrepancies_found_total.labels(
+                    kind=d.kind
+                ).inc()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reconcile: metric bump failed: {}", exc)
+
+        if self._incidents is None:
+            return
+
+        for d in report.discrepancies:
+            if d.kind == "orphan_db":
+                # Auto-patched ones land cleanly via the
+                # ``transition(..., event_type='reconciled')`` path.
+                # Non-auto-patched (legacy / future ambiguous) emit
+                # the unresolved incident so the operator notices.
+                # The current implementation auto-patches all orphan_db
+                # so this path emits ONLY when patching itself failed.
+                payload = d.payload
+                if not payload.get("auto_patched", True):
+                    try:
+                        await self._incidents.emit(
+                            type_=CriticalIncidentType.RECONCILE_ORPHAN_UNRESOLVED,
+                            context={
+                                "summary": d.summary,
+                                "payload": payload,
+                            },
+                            severity="warning",
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("reconcile: emit orphan_db incident failed: {}", exc)
+            elif d.kind == "balance_drift":
+                try:
+                    await self._incidents.emit(
+                        type_=CriticalIncidentType.BALANCE_DISCREPANCY,
+                        context={"summary": d.summary, "payload": d.payload},
+                        severity="critical",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("reconcile: emit balance_drift incident failed: {}", exc)
 
 
 # ─── Pure helpers (testable without DB) ─────────────────────────────
