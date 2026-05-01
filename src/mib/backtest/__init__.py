@@ -25,6 +25,8 @@ from mib.backtest.fill_simulator import (
     FillSimulationResult,
     FillSimulator,
     NoFillSimulator,
+    SlippageConfig,
+    SlippageFillSimulator,
 )
 from mib.backtest.types import BacktestBar, BacktestSettings, BacktestTrade
 
@@ -38,4 +40,6 @@ __all__ = [
     "FillSimulationResult",
     "FillSimulator",
     "NoFillSimulator",
+    "SlippageConfig",
+    "SlippageFillSimulator",
 ]
