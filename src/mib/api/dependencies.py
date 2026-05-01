@@ -13,6 +13,7 @@ from mib.ai.providers.groq_provider import GroqProvider
 from mib.ai.providers.nvidia_provider import NvidiaProvider
 from mib.ai.providers.openrouter_provider import OpenRouterProvider
 from mib.ai.router import AIRouter
+from mib.backtest.repo import BacktestRunRepository
 from mib.config import get_settings
 from mib.db.session import async_session_factory
 from mib.services.ai_service import AIService
@@ -85,6 +86,7 @@ _executor: OrderExecutor | None = None
 _mode_service: ModeService | None = None
 _news_reactor: NewsReactor | None = None
 _postmortem_runner: DailyPostmortemRunner | None = None
+_backtest_run_repo: BacktestRunRepository | None = None
 
 
 # ─── Source singletons ────────────────────────────────────────────────
@@ -334,6 +336,18 @@ def get_reconciler() -> Reconciler:
             session_factory=async_session_factory,
         )
     return _reconciler
+
+
+def get_backtest_run_repo() -> BacktestRunRepository:
+    """FASE 12.5+ persistence boundary for ``backtest_runs``.
+
+    Isolated from production trading tables — this repo NEVER touches
+    signals/trades/orders.
+    """
+    global _backtest_run_repo  # noqa: PLW0603
+    if _backtest_run_repo is None:
+        _backtest_run_repo = BacktestRunRepository(async_session_factory)
+    return _backtest_run_repo
 
 
 def get_postmortem_runner() -> DailyPostmortemRunner:
