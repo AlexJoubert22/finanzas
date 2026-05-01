@@ -127,10 +127,31 @@ async def test_status_paper_with_two_gates(
 async def test_status_semi_auto_includes_clean_streak_gate(
     fresh_db: None,  # noqa: ARG001
 ) -> None:
-    """SEMI_AUTO → LIVE adds the days_clean_streak gate (placeholder=0)."""
+    """SEMI_AUTO → LIVE adds the days_clean_streak gate.
+
+    FASE 13.5: streak now reads from critical_incidents. With an
+    empty incidents table the streak hits MAX_REPORTABLE_STREAK_DAYS
+    (365), so the gate is technically MET in cold-start tests; we
+    add a recent severe incident to make the assertion meaningful.
+    """
+    from datetime import UTC  # noqa: PLC0415
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td  # noqa: PLC0415
+
+    from mib.observability.incidents import (  # noqa: PLC0415
+        CriticalIncidentRepository,
+        CriticalIncidentType,
+    )
+
     await _seed(
         from_mode=TradingMode.PAPER, to_mode=TradingMode.SEMI_AUTO,
         days_ago=10,
+    )
+    incident_repo = CriticalIncidentRepository(async_session_factory)
+    await incident_repo.add(
+        type_=CriticalIncidentType.BALANCE_DISCREPANCY,
+        occurred_at=_dt.now(UTC).replace(tzinfo=None) - _td(days=5),
+        auto_detected=True,
     )
     repo = ModeTransitionRepository(async_session_factory)
     status = await build_mode_status(
@@ -144,8 +165,8 @@ async def test_status_semi_auto_includes_clean_streak_gate(
     streak_gate = next(
         g for g in status.gates if g.name == "days_clean_streak"
     )
-    # Placeholder returns 0; LIVE blocked until FASE 13.
-    assert streak_gate.have == 0
+    # 5 days since severe incident -> below 60-day threshold.
+    assert 4 <= streak_gate.have <= 5
     assert streak_gate.need == 60
     assert streak_gate.met is False
 

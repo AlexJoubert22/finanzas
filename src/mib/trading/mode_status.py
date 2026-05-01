@@ -21,7 +21,6 @@ from mib.trading.mode_guards import (
     MIN_DAYS_CLEAN_STREAK_FOR_LIVE,
     MIN_DAYS_PER_TRANSITION,
     closed_trades_in_mode,
-    days_clean_streak,
     days_in_current_mode,
 )
 from mib.trading.mode_transitions_repo import (
@@ -107,10 +106,17 @@ async def build_mode_status(
                 )
             )
         if next_mode == TradingMode.LIVE:
+            from mib.observability.clean_streak import (  # noqa: PLC0415
+                compute_days_clean_streak,
+            )
+
+            streak = await compute_days_clean_streak(
+                session_factory=session_factory
+            )
             gates.append(
                 ProgressGate(
                     name="days_clean_streak",
-                    have=days_clean_streak(),
+                    have=streak,
                     need=MIN_DAYS_CLEAN_STREAK_FOR_LIVE,
                 )
             )
