@@ -73,6 +73,7 @@ class PositionSizer:
         settings: Settings,
         *,
         existing_ticker_exposure: Decimal = Decimal(0),
+        live_first_30d_active: bool = False,
     ) -> SizerResult:
         equity = portfolio.equity_quote
         if equity <= 0:
@@ -131,6 +132,15 @@ class PositionSizer:
         if size_quote > available:
             size_quote = available
             caps.append("available_cash")
+
+        # FASE 14.3: first-30-days LIVE sizing modifier. Applied AFTER
+        # the headroom caps but BEFORE min_notional so that a halved
+        # size which falls under the threshold is rejected cleanly
+        # rather than silently traded at half-spec.
+        if live_first_30d_active:
+            modifier = Decimal(str(settings.live_first_30_days_sizing_modifier))
+            size_quote = size_quote * modifier
+            caps.append(f"first_30_days_live_x{modifier}")
 
         # Cap 4: min notional threshold. If we land below it, return 0
         # with an explicit reason. The signal isn't tradable today.

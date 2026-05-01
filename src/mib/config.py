@@ -129,6 +129,24 @@ class Settings(BaseSettings):
         default=600, ge=60, le=3600
     )
 
+    # ─── /go_live 2FA (FASE 14.2) ────────────────────────────────────
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_pass: str = ""
+    smtp_from: str = ""
+    operator_email: str = ""
+    go_live_code_ttl_seconds: int = Field(default=300, ge=60, le=900)
+    go_live_min_confirm_delay_seconds: int = Field(
+        default=30, ge=10, le=120
+    )
+    go_live_max_attempts: int = Field(default=5, ge=1, le=20)
+
+    # ─── First-30-days sizing (FASE 14.3) ────────────────────────────
+    live_first_30_days_sizing_modifier: float = Field(
+        default=0.5, gt=0.0, le=1.0
+    )
+
     # ─── Runtime tuning ─────────────────────────────────────────────
     malloc_arena_max: int = 2
 

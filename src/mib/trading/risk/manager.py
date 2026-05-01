@@ -16,7 +16,8 @@ gates further down the chain.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 
 from mib.config import get_settings
 from mib.logger import logger
@@ -26,18 +27,32 @@ from mib.trading.risk.protocol import Gate, GateResult
 from mib.trading.signals import PersistedSignal
 from mib.trading.sizing import PositionSizer
 
+#: Window during which the first_30_days sizing modifier is active
+#: after the most recent transition INTO LIVE.
+LIVE_FIRST_30_DAYS_WINDOW: timedelta = timedelta(days=30)
+
+LiveAnchorResolver = Callable[[], Awaitable[datetime | None]]
+
 
 class RiskManager:
     """Iterate over gates, short-circuit on first reject."""
 
     def __init__(
-        self, gates: list[Gate], *, sizer: PositionSizer | None = None
+        self,
+        gates: list[Gate],
+        *,
+        sizer: PositionSizer | None = None,
+        live_anchor_resolver: LiveAnchorResolver | None = None,
     ) -> None:
         self._gates: list[Gate] = list(gates)
         # Sizer is optional so gate-only tests can construct a manager
         # without piping the sizer dependency through. Production
         # always provides one (FASE 8.5 wiring in dependencies.py).
         self._sizer = sizer
+        # FASE 14.3: optional async callable returning the timestamp of
+        # the most recent transition INTO LIVE (None if never LIVE).
+        # Used to gate the first-30-days sizing modifier.
+        self._live_anchor_resolver = live_anchor_resolver
 
     @property
     def gates(self) -> tuple[Gate, ...]:
@@ -92,7 +107,13 @@ class RiskManager:
         # to approved=False with a composed reason.
         sized_amount = None
         if approved and self._sizer is not None:
-            sizer_result = self._sizer.size(signal, portfolio, settings)
+            live_first_30d_active = await self._is_live_first_30d_active()
+            sizer_result = self._sizer.size(
+                signal,
+                portfolio,
+                settings,
+                live_first_30d_active=live_first_30d_active,
+            )
             if sizer_result.amount > 0:
                 sized_amount = sizer_result.amount
                 reasoning += f" | sized: {sizer_result.reasoning}"
@@ -114,3 +135,32 @@ class RiskManager:
             decided_at=datetime.now(UTC),
             sized_amount=sized_amount,
         )
+
+    async def _is_live_first_30d_active(self) -> bool:
+        """True iff a live_anchor_resolver is wired and the resolved
+        anchor falls within :data:`LIVE_FIRST_30_DAYS_WINDOW`.
+
+        Resolver failures swallow to ``False`` — the modifier is a
+        safety reduction, not a gate, so a flaky lookup must never
+        block a live signal. The error is logged for the operator.
+        """
+        if self._live_anchor_resolver is None:
+            return False
+        try:
+            anchor = await self._live_anchor_resolver()
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "risk_manager: live_anchor_resolver failed: {}", exc
+            )
+            return False
+        if anchor is None:
+            return False
+        # Compare in naive UTC to match how transitions are persisted
+        # (mode_transitions stores naive UTC via .replace(tzinfo=None)).
+        anchor_naive = (
+            anchor.astimezone(UTC).replace(tzinfo=None)
+            if anchor.tzinfo is not None
+            else anchor
+        )
+        now_naive = datetime.now(UTC).replace(tzinfo=None)
+        return (now_naive - anchor_naive) < LIVE_FIRST_30_DAYS_WINDOW

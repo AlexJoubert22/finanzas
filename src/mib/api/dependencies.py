@@ -6,6 +6,8 @@ them once at startup and reuse them.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from mib.ai.models import ProviderId
 from mib.ai.providers.base import AIProvider
 from mib.ai.providers.gemini_provider import GeminiProvider
@@ -471,8 +473,31 @@ def get_risk_manager() -> RiskManager:
                     threshold=s.min_ai_confidence_threshold
                 )
             )
-        _risk_manager = RiskManager(gates=gates, sizer=PositionSizer())
+        _risk_manager = RiskManager(
+            gates=gates,
+            sizer=PositionSizer(),
+            live_anchor_resolver=_live_anchor_resolver,
+        )
     return _risk_manager
+
+
+async def _live_anchor_resolver() -> datetime | None:
+    """FASE 14.3: timestamp of the most recent transition INTO LIVE.
+
+    Returns ``None`` if MIB has never transitioned to LIVE — in which
+    case the first-30-days sizing modifier is a no-op. The
+    :class:`RiskManager` calls this on every signal evaluation; the
+    table is tiny (one row per transition) so the unindexed scan is
+    a non-issue.
+    """
+    from mib.trading.mode import TradingMode  # noqa: PLC0415
+    from mib.trading.mode_transitions_repo import (  # noqa: PLC0415
+        ModeTransitionRepository,
+    )
+
+    repo = ModeTransitionRepository(async_session_factory)
+    txn = await repo.latest_into(TradingMode.LIVE)
+    return txn.transitioned_at if txn is not None else None
 
 
 async def shutdown_sources() -> None:

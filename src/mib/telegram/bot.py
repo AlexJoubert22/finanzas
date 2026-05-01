@@ -35,11 +35,13 @@ from mib.telegram.handlers.emergency import (
     risk_cmd,
     stop_cmd,
 )
+from mib.telegram.handlers.go_live import go_live_cmd, go_live_confirm_cmd
 from mib.telegram.handlers.incident import incident_cmd
 from mib.telegram.handlers.macro import macro as macro_handler
 from mib.telegram.handlers.mode import mode_cmd, mode_force_cmd, mode_status_cmd
 from mib.telegram.handlers.news import news as news_handler
 from mib.telegram.handlers.panic import panic_cmd
+from mib.telegram.handlers.preflight import preflight_cmd
 from mib.telegram.handlers.price import price as price_handler
 from mib.telegram.handlers.reconcile import reconcile_cmd
 from mib.telegram.handlers.scan import scan as scan_handler
@@ -58,6 +60,10 @@ from mib.telegram.handlers.watch import (
 )
 from mib.telegram.handlers.watch import (
     watch as watch_handler,
+)
+from mib.telegram.handlers.wind_down import (
+    shutdown_cmd,
+    wind_down_cmd,
 )
 from mib.telegram.middleware import AuthMiddleware
 
@@ -94,9 +100,16 @@ def build_application() -> BotApp:
     app.add_handler(CommandHandler("backtest", backtest_cmd), group=-1)
     app.add_handler(CommandHandler("incident", incident_cmd), group=-1)
     app.add_handler(CommandHandler("panic", panic_cmd), group=-1)
+    app.add_handler(CommandHandler("preflight", preflight_cmd), group=-1)
+    app.add_handler(CommandHandler("go_live", go_live_cmd), group=-1)
+    app.add_handler(
+        CommandHandler("go_live_confirm", go_live_confirm_cmd), group=-1
+    )
     app.add_handler(CommandHandler("mode", mode_cmd), group=-1)
     app.add_handler(CommandHandler("mode_status", mode_status_cmd), group=-1)
     app.add_handler(CommandHandler("mode_force", mode_force_cmd), group=-1)
+    app.add_handler(CommandHandler("wind_down", wind_down_cmd), group=-1)
+    app.add_handler(CommandHandler("shutdown", shutdown_cmd), group=-1)
 
     # Commands
     app.add_handler(CommandHandler("start", start_handler))

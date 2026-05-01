@@ -705,6 +705,64 @@ class AIValidationRow(Base):
     decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
+# ─── /go_live pendings (FASE 14.2) ────────────────────────────────────
+class GoLivePendingRow(Base):
+    """Two-step /go_live audit trail. INSERT once + set-once
+    confirmed_at + attempts/status updated on confirm.
+    """
+
+    __tablename__ = "go_live_pendings"
+    __table_args__ = (
+        UniqueConstraint("pending_id", name="uq_go_live_pendings_pending_id"),
+        Index("ix_go_live_pendings_initiated_at", "initiated_at"),
+        CheckConstraint(
+            "status IN ('pending', 'confirmed', 'expired', 'rejected')",
+            name="ck_go_live_pendings_status",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    pending_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    actor: Mapped[str] = mapped_column(String(64), nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    initiated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    confirmed_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending"
+    )
+
+
+# ─── Wind-down state (FASE 14.5) ──────────────────────────────────────
+class WindDownStateRow(Base):
+    """Singleton-ish: one row per /wind_down invocation.
+
+    started_at is the entry, completed_at is set-once when all
+    positions flat. positions_remaining_last_check is updated by the
+    monitor job each tick.
+    """
+
+    __tablename__ = "wind_down_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    started_by: Mapped[str] = mapped_column(String(64), nullable=False)
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+    positions_at_start: Mapped[int] = mapped_column(Integer, nullable=False)
+    positions_remaining_last_check: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+    last_check_at: Mapped[datetime | None] = mapped_column(
+        DateTime, nullable=True
+    )
+
+
 # ─── Critical incidents (FASE 13.2) ──────────────────────────────────
 class CriticalIncidentRow(Base):
     """Persisted record of one operational incident.
