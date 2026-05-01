@@ -38,6 +38,8 @@ dependencies = [
   "mplfinance>=0.12.10b,<0.13",
   # YAML config
   "pyyaml>=6.0,<7",
+  # Observability (FASE 13.1)
+  "prometheus-client>=0.20,<1",
 ]
 
 [dependency-groups]

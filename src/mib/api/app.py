@@ -18,6 +18,7 @@ from mib.api.routers import (
     backtest,
     health,
     macro,
+    metrics,
     news,
     portfolio,
     scan,
@@ -71,5 +72,6 @@ def create_app() -> FastAPI:
     app.include_router(scan.router)
     app.include_router(portfolio.router)
     app.include_router(backtest.router)
+    app.include_router(metrics.router)
 
     return app
