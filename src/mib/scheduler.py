@@ -134,6 +134,22 @@ def start_scheduler() -> None:
         replace_existing=True,
     )
 
+    # FASE 13.8 — 6-hour Telegram heartbeat snapshot. Cron fires at
+    # 00/06/12/18 UTC. The endpoint heartbeat (FASE 13.7) is
+    # canonical for liveness; this job adds operator-readable
+    # context.
+    from mib.trading.jobs.telegram_heartbeat import (  # noqa: PLC0415
+        telegram_heartbeat_job,
+    )
+
+    sched.add_job(
+        telegram_heartbeat_job,
+        trigger=CronTrigger(hour="0,6,12,18", minute=0, timezone="UTC"),
+        id="telegram_heartbeat",
+        name="Telegram heartbeat (every 6h UTC)",
+        replace_existing=True,
+    )
+
     sched.start()
     # Fire once ASAP to populate the cache; fire-and-forget.
     import asyncio
@@ -142,7 +158,8 @@ def start_scheduler() -> None:
     asyncio.create_task(portfolio_sync_job())
     logger.info(
         "scheduler: started with health probe (5min) + expire_stale_signals (15min) "
-        "+ portfolio_sync (30s) + reconcile (5min) + news_reactor (5min)"
+        "+ portfolio_sync (30s) + reconcile (5min) + news_reactor (5min) "
+        "+ daily_postmortem (02:00) + telegram_heartbeat (every 6h)"
     )
 
 
