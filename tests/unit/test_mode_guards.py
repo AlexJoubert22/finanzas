@@ -212,8 +212,29 @@ async def test_paper_to_semi_auto_blocked_at_29_days(
 async def test_semi_auto_to_live_blocked_by_clean_streak_placeholder(
     fresh_db: None,  # noqa: ARG001
 ) -> None:
-    """days_clean_streak() returns 0 → LIVE blocked until FASE 13."""
+    """SEMI_AUTO -> LIVE blocked when clean-streak below threshold.
+
+    FASE 13.5: days_clean_streak now reads from critical_incidents.
+    A recent severe incident collapses the streak below the 60-day
+    threshold and SEMI_AUTO -> LIVE is rejected with the same
+    'insufficient_clean_streak' reason as the placeholder did.
+    """
+    from datetime import UTC  # noqa: PLC0415
+    from datetime import datetime as _dt
+
+    from mib.observability.incidents import (  # noqa: PLC0415
+        CriticalIncidentRepository,
+        CriticalIncidentType,
+    )
+
     await _seed_transition_into(TradingMode.SEMI_AUTO, days_ago=120)
+    # Seed a severe incident from 5 days ago -> streak collapses to ~5d.
+    incident_repo = CriticalIncidentRepository(async_session_factory)
+    await incident_repo.add(
+        type_=CriticalIncidentType.BALANCE_DISCREPANCY,
+        occurred_at=_dt.now(UTC).replace(tzinfo=None) - timedelta(days=5),
+        auto_detected=True,
+    )
     result = await check_transition_allowed(
         from_mode=TradingMode.SEMI_AUTO,
         to_mode=TradingMode.LIVE,

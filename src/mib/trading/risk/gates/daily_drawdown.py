@@ -30,6 +30,7 @@ from mib.trading.risk.state import TradingStateService
 if TYPE_CHECKING:  # pragma: no cover
     from mib.config import Settings
     from mib.models.portfolio import PortfolioSnapshot
+    from mib.observability.emitter import IncidentEmitter as IncidentEmitterProto
     from mib.trading.signals import Signal
 
 
@@ -44,10 +45,12 @@ class DailyDrawdownGate:
         session_factory: async_sessionmaker[AsyncSession],
         *,
         clock: type[datetime] = datetime,
+        incident_emitter: IncidentEmitterProto | None = None,
     ) -> None:
         self._state = state_service
         self._sf = session_factory
         self._clock = clock
+        self._incidents = incident_emitter
 
     async def check(
         self,
@@ -94,6 +97,27 @@ class DailyDrawdownGate:
                 actor=f"gate:{self.name}",
                 killed_until=tomorrow_midnight.replace(tzinfo=None),
             )
+            # FASE 13.3: emit KILL_SWITCH_DD_DAILY incident.
+            if self._incidents is not None:
+                try:
+                    from mib.observability.incidents import (  # noqa: PLC0415
+                        CriticalIncidentType,
+                    )
+
+                    await self._incidents.emit(
+                        type_=CriticalIncidentType.KILL_SWITCH_DD_DAILY,
+                        context={
+                            "today_pnl": str(today_pnl),
+                            "threshold": str(threshold),
+                            "starting_equity": str(starting_equity),
+                            "killed_until": tomorrow_midnight.isoformat(),
+                        },
+                        severity="critical",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "daily_drawdown: incident emit failed: {}", exc
+                    )
             return GateResult(
                 passed=False,
                 reason=(

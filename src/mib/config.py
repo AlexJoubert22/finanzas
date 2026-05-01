@@ -119,6 +119,16 @@ class Settings(BaseSettings):
     max_position_pct: float = Field(default=0.10, gt=0.0, le=1.0)
     min_notional_quote: float = Field(default=10.0, ge=0.0)
 
+    # ─── Dead-man heartbeat (FASE 13.7) ─────────────────────────────
+    # Token authenticating the public /heartbeat endpoint. Set to a
+    # long random string in production; empty disables the endpoint
+    # (returns 503 to avoid leaking that it exists without auth).
+    heartbeat_token: str = ""
+    heartbeat_scheduler_max_age_sec: int = Field(default=60, ge=10, le=600)
+    heartbeat_reconcile_max_age_sec: int = Field(
+        default=600, ge=60, le=3600
+    )
+
     # ─── Runtime tuning ─────────────────────────────────────────────
     malloc_arena_max: int = 2
 

@@ -141,7 +141,16 @@ async def check_transition_allowed(
             )
 
     if to_mode == TradingMode.LIVE:
-        streak = days_clean_streak()
+        # Use the async-native query directly — calling the sync
+        # ``days_clean_streak()`` here would hit the permissive
+        # MAX fallback because we're inside an event loop.
+        from mib.observability.clean_streak import (  # noqa: PLC0415
+            compute_days_clean_streak,
+        )
+
+        streak = await compute_days_clean_streak(
+            session_factory=session_factory
+        )
         if streak < MIN_DAYS_CLEAN_STREAK_FOR_LIVE:
             return GuardResult(
                 allowed=False,
@@ -237,14 +246,22 @@ async def closed_trades_in_mode(
 
 
 def days_clean_streak() -> int:
-    """Placeholder: returns 0 until FASE 13 wires the real metric.
+    """FASE 13.5: real metric backed by ``critical_incidents``.
 
-    TODO FASE 13: replace with a query against ``critical_incidents``
-    that returns days since the last reset trigger (>24h to resolve
-    or a severe-type incident). Until then, LIVE remains unreachable
-    without ``/mode_force``.
+    Returns days since the last reset trigger:
+    - Any incident in :data:`SEVERE_TYPES_RESET_ALWAYS` instantly resets.
+    - Any other incident with resolution time > 24h (or unresolved
+      after 24h elapsed) resets.
+
+    Returns :data:`MAX_REPORTABLE_STREAK_DAYS` (365) when the table is
+    empty — cold-start systems don't get penalised.
     """
-    return 0
+    from mib.db.session import async_session_factory  # noqa: PLC0415
+    from mib.observability.clean_streak import (  # noqa: PLC0415
+        days_clean_streak_sync,
+    )
+
+    return days_clean_streak_sync(session_factory=async_session_factory)
 
 
 # ─── Internal ────────────────────────────────────────────────────────

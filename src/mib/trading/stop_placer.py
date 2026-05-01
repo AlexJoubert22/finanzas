@@ -50,6 +50,7 @@ from mib.trading.orders import OrderResult, OrderSide, is_terminal_status
 from mib.trading.signals import Signal
 
 if TYPE_CHECKING:  # pragma: no cover
+    from mib.observability.emitter import IncidentEmitter as IncidentEmitterProto
     from mib.sources.ccxt_trader import CCXTTrader
 
 
@@ -82,12 +83,14 @@ class NativeStopPlacer:
         *,
         attempts: int = 3,
         backoffs: tuple[float, ...] = _RETRY_BACKOFFS_SECONDS,
+        incident_emitter: IncidentEmitterProto | None = None,
     ) -> None:
         self._trader = trader
         self._order_repo = order_repo
         self._alerter = alerter
         self._attempts = attempts
         self._backoffs = backoffs
+        self._incidents = incident_emitter
 
     async def place_stop_after_fill(
         self,
@@ -206,10 +209,8 @@ class NativeStopPlacer:
                 reason=None,
             )
 
-        # All retries exhausted (or permanent fail). Alert.
-        # TODO FASE 13: emit CriticalIncident type
-        # NATIVE_STOP_MISSING_AFTER_FILL once the incident registry
-        # lands. For now we ship a high-priority Telegram alert.
+        # All retries exhausted (or permanent fail). Alert + emit
+        # CriticalIncident NATIVE_STOP_MISSING_AFTER_FILL (FASE 13.3).
         warning_message = (
             "🚨 <b>STOP NO COLOCADO tras fill</b>\n"
             f"signal #{entry.signal_id} ticker <code>{signal.ticker}</code>\n"
@@ -227,6 +228,27 @@ class NativeStopPlacer:
             entry.signal_id,
             last_reason,
         )
+        if self._incidents is not None:
+            try:
+                from mib.observability.incidents import (  # noqa: PLC0415
+                    CriticalIncidentType,
+                )
+
+                await self._incidents.emit(
+                    type_=CriticalIncidentType.NATIVE_STOP_MISSING_AFTER_FILL,
+                    context={
+                        "signal_id": entry.signal_id,
+                        "ticker": signal.ticker,
+                        "entry_order_id": entry_order_id,
+                        "attempts": self._attempts,
+                        "last_reason": (last_reason or "")[:400],
+                    },
+                    severity="critical",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "stop_placer: incident emit failed: {}", exc
+                )
         return StopPlacementResult(
             success=False,
             stop_order_id=None,
