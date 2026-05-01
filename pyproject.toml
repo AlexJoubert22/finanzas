@@ -158,6 +158,7 @@ addopts = "-ra --strict-markers"
 markers = [
   "integration: tests que requieren servicios externos o DB real",
   "slow: tests que tardan más de 1s",
+  "bias_check: FASE 12.8 guardian — backtester look-ahead bias test",
 ]
 
 [tool.coverage.run]

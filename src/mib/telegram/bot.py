@@ -27,6 +27,7 @@ from mib.config import get_settings
 from mib.logger import logger
 from mib.telegram import BotApp
 from mib.telegram.handlers.ask import ask as ask_handler
+from mib.telegram.handlers.backtest import backtest_cmd
 from mib.telegram.handlers.callbacks import on_price_callback
 from mib.telegram.handlers.chart import chart as chart_handler
 from mib.telegram.handlers.emergency import (
@@ -88,6 +89,7 @@ def build_application() -> BotApp:
     app.add_handler(CommandHandler("freeze", freeze_cmd), group=-1)
     app.add_handler(CommandHandler("risk", risk_cmd), group=-1)
     app.add_handler(CommandHandler("reconcile", reconcile_cmd), group=-1)
+    app.add_handler(CommandHandler("backtest", backtest_cmd), group=-1)
     app.add_handler(CommandHandler("mode", mode_cmd), group=-1)
     app.add_handler(CommandHandler("mode_status", mode_status_cmd), group=-1)
     app.add_handler(CommandHandler("mode_force", mode_force_cmd), group=-1)

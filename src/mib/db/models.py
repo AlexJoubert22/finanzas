@@ -705,6 +705,63 @@ class AIValidationRow(Base):
     decided_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
+# ─── Backtest runs (append-only, FASE 12.5) ──────────────────────────
+class BacktestRunRow(Base):
+    """One row per ``Backtester.run`` call.
+
+    BORN APPEND-ONLY. Production trading tables (signals / trades /
+    orders / risk_decisions / *_status_events) MUST NEVER be touched
+    by a backtest. The isolation test in FASE 12.5 verifies this
+    invariant by snapshotting row counts before and after a run.
+    Any future tables that need to persist replay data live with the
+    ``bt_`` prefix (NOT in this commit).
+    """
+
+    __tablename__ = "backtest_runs"
+    __table_args__ = (
+        Index(
+            "ix_backtest_runs_strategy_ran",
+            "strategy_id",
+            "ran_at",
+        ),
+        Index("ix_backtest_runs_ran_at", "ran_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    strategy_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    universe_json: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    date_range_start: Mapped[str] = mapped_column(String(10), nullable=False)
+    date_range_end: Mapped[str] = mapped_column(String(10), nullable=False)
+    initial_capital_quote: Mapped[Decimal] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=False
+    )
+    final_equity_quote: Mapped[Decimal] = mapped_column(
+        Numeric(precision=20, scale=8), nullable=False
+    )
+    params_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    slippage_config_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON, nullable=True
+    )
+    metrics_json: Mapped[dict[str, Any]] = mapped_column(
+        JSON, nullable=False, default=dict
+    )
+    equity_curve_path: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )
+    total_trades: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    ran_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    ran_by_actor: Mapped[str] = mapped_column(String(64), nullable=False)
+    runtime_seconds: Mapped[Decimal] = mapped_column(
+        Numeric(precision=10, scale=4), nullable=False, default=Decimal(0)
+    )
+    random_seed: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    engine_version: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="1"
+    )
+
+
 # ─── Reconciliation (FASE 9.5) ────────────────────────────────────────
 class PortfolioSnapshotRow(Base):
     """Persisted snapshot of :class:`PortfolioSnapshot` for diagnostics.
