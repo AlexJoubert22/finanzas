@@ -21,6 +21,7 @@ Sub-commits land progressively:
 """
 
 from mib.backtest.engine import Backtester, BacktestFeed, BacktestReport
+from mib.backtest.equity import EquityPoint, build_equity_curve
 from mib.backtest.fill_simulator import (
     FillSimulationResult,
     FillSimulator,
@@ -37,9 +38,11 @@ __all__ = [
     "BacktestReport",
     "BacktestSettings",
     "BacktestTrade",
+    "EquityPoint",
     "FillSimulationResult",
     "FillSimulator",
     "NoFillSimulator",
     "SlippageConfig",
     "SlippageFillSimulator",
+    "build_equity_curve",
 ]
