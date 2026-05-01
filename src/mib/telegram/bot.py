@@ -61,6 +61,10 @@ from mib.telegram.handlers.watch import (
 from mib.telegram.handlers.watch import (
     watch as watch_handler,
 )
+from mib.telegram.handlers.wind_down import (
+    shutdown_cmd,
+    wind_down_cmd,
+)
 from mib.telegram.middleware import AuthMiddleware
 
 _app: BotApp | None = None
@@ -104,6 +108,8 @@ def build_application() -> BotApp:
     app.add_handler(CommandHandler("mode", mode_cmd), group=-1)
     app.add_handler(CommandHandler("mode_status", mode_status_cmd), group=-1)
     app.add_handler(CommandHandler("mode_force", mode_force_cmd), group=-1)
+    app.add_handler(CommandHandler("wind_down", wind_down_cmd), group=-1)
+    app.add_handler(CommandHandler("shutdown", shutdown_cmd), group=-1)
 
     # Commands
     app.add_handler(CommandHandler("start", start_handler))
